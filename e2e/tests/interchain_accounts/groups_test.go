@@ -1,24 +1,31 @@
-package interchain_accounts
+//go:build !test_e2e
+
+package interchainaccounts
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/cosmos/gogoproto/proto"
+	interchaintest "github.com/strangelove-ventures/interchaintest/v8"
+	"github.com/strangelove-ventures/interchaintest/v8/ibc"
+	test "github.com/strangelove-ventures/interchaintest/v8/testutil"
+	testifysuite "github.com/stretchr/testify/suite"
+
+	sdkmath "cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	grouptypes "github.com/cosmos/cosmos-sdk/x/group"
-	"github.com/cosmos/gogoproto/proto"
-	interchaintest "github.com/strangelove-ventures/interchaintest/v7"
-	"github.com/strangelove-ventures/interchaintest/v7/ibc"
-	test "github.com/strangelove-ventures/interchaintest/v7/testutil"
-	"github.com/stretchr/testify/suite"
 
 	"github.com/cosmos/ibc-go/e2e/testsuite"
+	"github.com/cosmos/ibc-go/e2e/testsuite/query"
 	"github.com/cosmos/ibc-go/e2e/testvalues"
-	controllertypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/controller/types"
-	icatypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	controllertypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/controller/types"
+	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 const (
@@ -30,14 +37,14 @@ const (
 	// exceeded for a proposal to succeed.
 	DefaultGroupThreshold = "1"
 
-	// DefaultMetadata defines a resusable metadata string for testing purposes
+	// DefaultMetadata defines a reusable metadata string for testing purposes
 	DefaultMetadata = "custom metadata"
 
 	// DefaultMinExecutionPeriod is the minimum duration after the proposal submission
 	// where members can start sending MsgExec. This means that the window for
 	// sending a MsgExec transaction is:
 	// `[ submission + min_execution_period ; submission + voting_period + max_execution_period]`
-	// where max_execution_period is a app-specific config, defined in the keeper.
+	// where max_execution_period is an app-specific config, defined in the keeper.
 	// If not set, min_execution_period will default to 0.
 	DefaultMinExecutionPeriod = time.Duration(0)
 
@@ -52,8 +59,9 @@ const (
 	InitialProposalID = 1
 )
 
+// compatibility:from_version: v7.4.0
 func TestInterchainAccountsGroupsTestSuite(t *testing.T) {
-	suite.Run(t, new(InterchainAccountsGroupsTestSuite))
+	testifysuite.Run(t, new(InterchainAccountsGroupsTestSuite))
 }
 
 type InterchainAccountsGroupsTestSuite struct {
@@ -61,8 +69,7 @@ type InterchainAccountsGroupsTestSuite struct {
 }
 
 func (s *InterchainAccountsGroupsTestSuite) QueryGroupPolicyAddress(ctx context.Context, chain ibc.Chain) string {
-	queryClient := s.GetChainGRCPClients(chain).GroupsQueryClient
-	res, err := queryClient.GroupPoliciesByGroup(ctx, &grouptypes.QueryGroupPoliciesByGroupRequest{
+	res, err := query.GRPCQuery[grouptypes.QueryGroupPoliciesByGroupResponse](ctx, chain, &grouptypes.QueryGroupPoliciesByGroupRequest{
 		GroupId: InitialGroupID, // always use the initial group id
 	})
 	s.Require().NoError(err)
@@ -80,9 +87,9 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 		err               error
 	)
 
-	// setup relayers and connection-0 between two chains
-	// channel-0 is a transfer channel but it will not be used in this test case
-	relayer, _ := s.SetupChainsRelayerAndChannel(ctx)
+	testName := t.Name()
+	relayer := s.CreateDefaultPaths(testName)
+
 	chainA, chainB := s.GetChains()
 
 	chainAWallet := s.CreateUserOnChainA(ctx, testvalues.StartingTokenAmount)
@@ -109,7 +116,7 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 
 	t.Run("submit proposal for MsgRegisterInterchainAccount", func(t *testing.T) {
 		groupPolicyAddr = s.QueryGroupPolicyAddress(ctx, chainA)
-		msgRegisterAccount := controllertypes.NewMsgRegisterInterchainAccount(ibctesting.FirstConnectionID, groupPolicyAddr, icatypes.NewDefaultMetadataString(ibctesting.FirstConnectionID, ibctesting.FirstConnectionID))
+		msgRegisterAccount := controllertypes.NewMsgRegisterInterchainAccount(ibctesting.FirstConnectionID, groupPolicyAddr, icatypes.NewDefaultMetadataString(ibctesting.FirstConnectionID, ibctesting.FirstConnectionID), channeltypes.ORDERED)
 
 		msgSubmitProposal, err := grouptypes.NewMsgSubmitProposal(groupPolicyAddr, []string{chainAAddress}, []sdk.Msg{msgRegisterAccount}, DefaultMetadata, grouptypes.Exec_EXEC_UNSPECIFIED, "e2e groups proposal: for MsgRegisterInterchainAccount", "e2e groups proposal: for MsgRegisterInterchainAccount")
 		s.Require().NoError(err)
@@ -131,11 +138,11 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 	})
 
 	t.Run("start relayer", func(t *testing.T) {
-		s.StartRelayer(relayer)
+		s.StartRelayer(relayer, testName)
 	})
 
 	t.Run("verify interchain account registration success", func(t *testing.T) {
-		interchainAccAddr, err = s.QueryInterchainAccount(ctx, chainA, groupPolicyAddr, ibctesting.FirstConnectionID)
+		interchainAccAddr, err = query.InterchainAccount(ctx, chainA, groupPolicyAddr, ibctesting.FirstConnectionID)
 		s.Require().NotEmpty(interchainAccAddr)
 		s.Require().NoError(err)
 
@@ -147,7 +154,7 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 	t.Run("fund interchain account wallet", func(t *testing.T) {
 		err := chainB.SendFunds(ctx, interchaintest.FaucetAccountKeyName, ibc.WalletAmount{
 			Address: interchainAccAddr,
-			Amount:  testvalues.StartingTokenAmount,
+			Amount:  sdkmath.NewInt(testvalues.StartingTokenAmount),
 			Denom:   chainB.Config().Denom,
 		})
 		s.Require().NoError(err)
@@ -162,7 +169,7 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 
 		cdc := testsuite.Codec()
 
-		bz, err := icatypes.SerializeCosmosTx(cdc, []proto.Message{msgBankSend})
+		bz, err := icatypes.SerializeCosmosTx(cdc, []proto.Message{msgBankSend}, icatypes.EncodingProtobuf)
 		s.Require().NoError(err)
 
 		packetData := icatypes.InterchainAccountPacketData{
@@ -193,17 +200,17 @@ func (s *InterchainAccountsGroupsTestSuite) TestInterchainAccountsGroupsIntegrat
 
 	t.Run("verify tokens transferred", func(t *testing.T) {
 		s.Require().NoError(test.WaitForBlocks(ctx, 10, chainA, chainB), "failed to wait for blocks")
+		balance, err := query.Balance(ctx, chainB, chainBAddress, chainB.Config().Denom)
 
-		balance, err := chainB.GetBalance(ctx, chainBAddress, chainB.Config().Denom)
 		s.Require().NoError(err)
 
 		expected := testvalues.IBCTransferAmount + testvalues.StartingTokenAmount
-		s.Require().Equal(expected, balance)
+		s.Require().Equal(expected, balance.Int64())
 
-		balance, err = chainB.GetBalance(ctx, interchainAccAddr, chainB.Config().Denom)
+		balance, err = query.Balance(ctx, chainB, interchainAccAddr, chainB.Config().Denom)
 		s.Require().NoError(err)
 
 		expected = testvalues.StartingTokenAmount - testvalues.IBCTransferAmount
-		s.Require().Equal(expected, balance)
+		s.Require().Equal(expected, balance.Int64())
 	})
 }

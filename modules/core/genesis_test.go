@@ -1,23 +1,28 @@
 package ibc_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
-	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	"github.com/cosmos/cosmos-sdk/codec"
-	"github.com/stretchr/testify/suite"
+	proto "github.com/cosmos/gogoproto/proto"
+	testifysuite "github.com/stretchr/testify/suite"
 
-	ibc "github.com/cosmos/ibc-go/v7/modules/core"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	connectiontypes "github.com/cosmos/ibc-go/v7/modules/core/03-connection/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	commitmenttypes "github.com/cosmos/ibc-go/v7/modules/core/23-commitment/types"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
-	"github.com/cosmos/ibc-go/v7/modules/core/types"
-	ibctm "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
-	"github.com/cosmos/ibc-go/v7/testing/simapp"
+	"github.com/cosmos/cosmos-sdk/codec"
+
+	ibc "github.com/cosmos/ibc-go/v10/modules/core"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	clientv2types "github.com/cosmos/ibc-go/v10/modules/core/02-client/v2/types"
+	connectiontypes "github.com/cosmos/ibc-go/v10/modules/core/03-connection/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	channelv2types "github.com/cosmos/ibc-go/v10/modules/core/04-channel/v2/types"
+	commitmenttypes "github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
+	"github.com/cosmos/ibc-go/v10/modules/core/types"
+	ibctm "github.com/cosmos/ibc-go/v10/modules/light-clients/07-tendermint"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
+	mockv2 "github.com/cosmos/ibc-go/v10/testing/mock/v2"
+	"github.com/cosmos/ibc-go/v10/testing/simapp"
 )
 
 const (
@@ -36,7 +41,7 @@ const (
 var clientHeight = clienttypes.NewHeight(1, 10)
 
 type IBCTestSuite struct {
-	suite.Suite
+	testifysuite.Suite
 
 	coordinator *ibctesting.Coordinator
 
@@ -53,21 +58,21 @@ func (suite *IBCTestSuite) SetupTest() {
 }
 
 func TestIBCTestSuite(t *testing.T) {
-	suite.Run(t, new(IBCTestSuite))
+	testifysuite.Run(t, new(IBCTestSuite))
 }
 
 func (suite *IBCTestSuite) TestValidateGenesis() {
-	header := suite.chainA.CreateTMClientHeader(suite.chainA.ChainID, suite.chainA.CurrentHeader.Height, clienttypes.NewHeight(0, uint64(suite.chainA.CurrentHeader.Height-1)), suite.chainA.CurrentHeader.Time, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Signers)
+	header := suite.chainA.CreateTMClientHeader(suite.chainA.ChainID, suite.chainA.ProposedHeader.Height, clienttypes.NewHeight(0, uint64(suite.chainA.ProposedHeader.Height-1)), suite.chainA.ProposedHeader.Time, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Signers)
 
 	testCases := []struct {
 		name     string
 		genState *types.GenesisState
-		expPass  bool
+		expError error
 	}{
 		{
 			name:     "default",
 			genState: types.DefaultGenesisState(),
-			expPass:  true,
+			expError: nil,
 		},
 		{
 			name: "valid genesis",
@@ -104,6 +109,18 @@ func (suite *IBCTestSuite) TestValidateGenesis() {
 					false,
 					2,
 				),
+				ClientV2Genesis: clientv2types.GenesisState{
+					CounterpartyInfos: []clientv2types.GenesisCounterpartyInfo{
+						{
+							ClientId:         "test-1",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-0"),
+						},
+						{
+							ClientId:         "test-0",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-1"),
+						},
+					},
+				},
 				ConnectionGenesis: connectiontypes.NewGenesisState(
 					[]connectiontypes.IdentifiedConnection{
 						connectiontypes.NewIdentifiedConnection(connectionID, connectiontypes.NewConnectionEnd(connectiontypes.INIT, clientID, connectiontypes.NewCounterparty(clientID2, connectionID2, commitmenttypes.NewMerklePrefix([]byte("prefix"))), []*connectiontypes.Version{ibctesting.ConnectionVersion}, 0)),
@@ -142,9 +159,27 @@ func (suite *IBCTestSuite) TestValidateGenesis() {
 						channeltypes.NewPacketSequence(port2, channel2, 1),
 					},
 					0,
+					channeltypes.Params{UpgradeTimeout: channeltypes.DefaultTimeout},
+				),
+				ChannelV2Genesis: channelv2types.NewGenesisState(
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, []byte("ack")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, []byte("")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel1, 1, []byte("commit_hash")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, []byte("async_packet")),
+					},
+					[]channelv2types.PacketSequence{
+						channelv2types.NewPacketSequence(channel1, 1),
+					},
 				),
 			},
-			expPass: true,
+			expError: nil,
 		},
 		{
 			name: "invalid client genesis",
@@ -169,14 +204,17 @@ func (suite *IBCTestSuite) TestValidateGenesis() {
 					false,
 					2,
 				),
+				ClientV2Genesis:   clientv2types.DefaultGenesisState(),
 				ConnectionGenesis: connectiontypes.DefaultGenesisState(),
+				ChannelV2Genesis:  channelv2types.DefaultGenesisState(),
 			},
-			expPass: false,
+			expError: errors.New("genesis metadata key cannot be empty"),
 		},
 		{
 			name: "invalid connection genesis",
 			genState: &types.GenesisState{
-				ClientGenesis: clienttypes.DefaultGenesisState(),
+				ClientGenesis:   clienttypes.DefaultGenesisState(),
+				ClientV2Genesis: clientv2types.DefaultGenesisState(),
 				ConnectionGenesis: connectiontypes.NewGenesisState(
 					[]connectiontypes.IdentifiedConnection{
 						connectiontypes.NewIdentifiedConnection(connectionID, connectiontypes.NewConnectionEnd(connectiontypes.INIT, "(CLIENTIDONE)", connectiontypes.NewCounterparty(clientID, connectionID2, commitmenttypes.NewMerklePrefix([]byte("prefix"))), []*connectiontypes.Version{connectiontypes.NewVersion("1.1", nil)}, 0)),
@@ -187,37 +225,83 @@ func (suite *IBCTestSuite) TestValidateGenesis() {
 					0,
 					connectiontypes.Params{},
 				),
+				ChannelV2Genesis: channelv2types.DefaultGenesisState(),
 			},
-			expPass: false,
+			expError: errors.New("invalid connection"),
 		},
 		{
 			name: "invalid channel genesis",
 			genState: &types.GenesisState{
 				ClientGenesis:     clienttypes.DefaultGenesisState(),
+				ClientV2Genesis:   clientv2types.DefaultGenesisState(),
 				ConnectionGenesis: connectiontypes.DefaultGenesisState(),
 				ChannelGenesis: channeltypes.GenesisState{
 					Acknowledgements: []channeltypes.PacketState{
 						channeltypes.NewPacketState("(portID)", channel1, 1, []byte("ack")),
 					},
 				},
+				ChannelV2Genesis: channelv2types.DefaultGenesisState(),
 			},
-			expPass: false,
+			expError: errors.New("invalid acknowledgement"),
+		},
+		{
+			name: "invalid channel v2 genesis",
+			genState: &types.GenesisState{
+				ClientGenesis:     clienttypes.DefaultGenesisState(),
+				ConnectionGenesis: connectiontypes.DefaultGenesisState(),
+				ChannelGenesis:    channeltypes.DefaultGenesisState(),
+				ChannelV2Genesis: channelv2types.GenesisState{
+					Acknowledgements: []channelv2types.PacketState{
+						channelv2types.NewPacketState(channel1, 1, nil),
+					},
+				},
+			},
+			expError: errors.New("invalid acknowledgement"),
+		},
+		{
+			name: "invalid clientv2 genesis",
+			genState: &types.GenesisState{
+				ClientGenesis: clienttypes.DefaultGenesisState(),
+				ClientV2Genesis: clientv2types.GenesisState{
+					CounterpartyInfos: []clientv2types.GenesisCounterpartyInfo{
+						{
+							ClientId:         "",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-0"),
+						},
+						{
+							ClientId:         "test-0",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-1"),
+						},
+					},
+				},
+				ConnectionGenesis: connectiontypes.DefaultGenesisState(),
+				ChannelGenesis:    channeltypes.DefaultGenesisState(),
+			},
+			expError: errors.New("counterparty client id cannot be empty"),
 		},
 	}
 
 	for _, tc := range testCases {
 		tc := tc
 		err := tc.genState.Validate()
-		if tc.expPass {
+		if tc.expError == nil {
 			suite.Require().NoError(err, tc.name)
 		} else {
 			suite.Require().Error(err, tc.name)
+			suite.Require().Contains(err.Error(), tc.expError.Error())
 		}
 	}
 }
 
 func (suite *IBCTestSuite) TestInitGenesis() {
-	header := suite.chainA.CreateTMClientHeader(suite.chainA.ChainID, suite.chainA.CurrentHeader.Height, clienttypes.NewHeight(0, uint64(suite.chainA.CurrentHeader.Height-1)), suite.chainA.CurrentHeader.Time, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Signers)
+	header := suite.chainA.CreateTMClientHeader(suite.chainA.ChainID, suite.chainA.ProposedHeader.Height, clienttypes.NewHeight(0, uint64(suite.chainA.ProposedHeader.Height-1)), suite.chainA.ProposedHeader.Time, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Vals, suite.chainA.Signers)
+
+	packet := channelv2types.NewPacket(
+		1, "07-tendermint-0", "07-tendermint-1",
+		uint64(suite.chainA.GetContext().BlockTime().Unix()), mockv2.NewMockPayload("src", "dst"),
+	)
+	bz, err := proto.Marshal(&packet)
+	suite.Require().NoError(err)
 
 	testCases := []struct {
 		name     string
@@ -262,6 +346,18 @@ func (suite *IBCTestSuite) TestInitGenesis() {
 					false,
 					0,
 				),
+				ClientV2Genesis: clientv2types.GenesisState{
+					CounterpartyInfos: []clientv2types.GenesisCounterpartyInfo{
+						{
+							ClientId:         "test-1",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-0"),
+						},
+						{
+							ClientId:         "test-0",
+							CounterpartyInfo: clientv2types.NewCounterpartyInfo([][]byte{{0o1}}, "test-1"),
+						},
+					},
+				},
 				ConnectionGenesis: connectiontypes.NewGenesisState(
 					[]connectiontypes.IdentifiedConnection{
 						connectiontypes.NewIdentifiedConnection(connectionID, connectiontypes.NewConnectionEnd(connectiontypes.INIT, clientID, connectiontypes.NewCounterparty(clientID2, connectionID2, commitmenttypes.NewMerklePrefix([]byte("prefix"))), []*connectiontypes.Version{ibctesting.ConnectionVersion}, 0)),
@@ -300,16 +396,36 @@ func (suite *IBCTestSuite) TestInitGenesis() {
 						channeltypes.NewPacketSequence(port2, channel2, 1),
 					},
 					0,
+					channeltypes.Params{UpgradeTimeout: channeltypes.DefaultTimeout},
+				),
+				ChannelV2Genesis: channelv2types.NewGenesisState(
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, []byte("ack")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, []byte("")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel1, 1, []byte("commit_hash")),
+					},
+					[]channelv2types.PacketState{
+						channelv2types.NewPacketState(channel2, 1, bz),
+					},
+					[]channelv2types.PacketSequence{
+						channelv2types.NewPacketSequence(channel1, 1),
+					},
 				),
 			},
 		},
 	}
 
 	for _, tc := range testCases {
-		app := simapp.Setup(false)
+		tc := tc
+
+		app := simapp.Setup(suite.T(), false)
 
 		suite.NotPanics(func() {
-			ibc.InitGenesis(app.BaseApp.NewContext(false, tmproto.Header{Height: 1}), *app.IBCKeeper, tc.genState)
+			ibc.InitGenesis(app.BaseApp.NewContext(false), *app.IBCKeeper, tc.genState)
 		})
 	}
 }
@@ -323,15 +439,17 @@ func (suite *IBCTestSuite) TestExportGenesis() {
 			"success",
 			func() {
 				// creates clients
-				suite.coordinator.Setup(ibctesting.NewPath(suite.chainA, suite.chainB))
+				ibctesting.NewPath(suite.chainA, suite.chainB).Setup()
 				// create extra clients
-				suite.coordinator.SetupClients(ibctesting.NewPath(suite.chainA, suite.chainB))
-				suite.coordinator.SetupClients(ibctesting.NewPath(suite.chainA, suite.chainB))
+				ibctesting.NewPath(suite.chainA, suite.chainB).SetupClients()
+				ibctesting.NewPath(suite.chainA, suite.chainB).SetupClients()
 			},
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
 			suite.SetupTest()
 

@@ -36,7 +36,7 @@ var IsValidID = regexp.MustCompile(`^[a-zA-Z0-9\.\_\+\-\#\[\]\<\>]+$`).MatchStri
 // ValidateFn function type to validate path and identifier bytestrings
 type ValidateFn func(string) error
 
-func defaultIdentifierValidator(id string, min, max int) error {
+func defaultIdentifierValidator(id string, minLength, maxLength int) error {
 	if strings.TrimSpace(id) == "" {
 		return errorsmod.Wrap(ErrInvalidID, "identifier cannot be blank")
 	}
@@ -45,10 +45,10 @@ func defaultIdentifierValidator(id string, min, max int) error {
 		return errorsmod.Wrapf(ErrInvalidID, "identifier %s cannot contain separator '/'", id)
 	}
 	// valid id must fit the length requirements
-	if len(id) < min || len(id) > max {
-		return errorsmod.Wrapf(ErrInvalidID, "identifier %s has invalid length: %d, must be between %d-%d characters", id, len(id), min, max)
+	if len(id) < minLength || len(id) > maxLength {
+		return errorsmod.Wrapf(ErrInvalidID, "identifier %s has invalid length: %d, must be between %d-%d characters", id, len(id), minLength, maxLength)
 	}
-	// valid id must contain only lower alphabetic characters
+	// valid id must contain only alphanumeric characters and some allowed symbols.
 	if !IsValidID(id) {
 		return errorsmod.Wrapf(
 			ErrInvalidID,
@@ -60,10 +60,10 @@ func defaultIdentifierValidator(id string, min, max int) error {
 }
 
 // ClientIdentifierValidator is the default validator function for Client identifiers.
-// A valid Identifier must be between 9-64 characters and only contain alphanumeric and some allowed
+// A valid Identifier must be between 8-64 characters and only contain alphanumeric and some allowed
 // special characters (see IsValidID).
 func ClientIdentifierValidator(id string) error {
-	return defaultIdentifierValidator(id, 9, DefaultMaxCharacterLength)
+	return defaultIdentifierValidator(id, 8, DefaultMaxCharacterLength)
 }
 
 // ConnectionIdentifierValidator is the default validator function for Connection identifiers.
@@ -87,7 +87,7 @@ func PortIdentifierValidator(id string) error {
 	return defaultIdentifierValidator(id, 2, DefaultMaxPortCharacterLength)
 }
 
-// NewPathValidator takes in a Identifier Validator function and returns
+// NewPathValidator takes in an Identifier Validator function and returns
 // a Path Validator function which requires path to consist of `/`-separated valid identifiers,
 // where a valid identifier is between 1-64 characters, contains only alphanumeric and some allowed
 // special characters (see IsValidID), and satisfies the custom `idValidator` function.

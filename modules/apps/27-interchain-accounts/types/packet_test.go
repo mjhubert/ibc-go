@@ -1,16 +1,17 @@
 package types_test
 
 import (
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-)
+	"fmt"
 
-var largeMemo = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum"
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
+)
 
 func (suite *TypesTestSuite) TestValidateBasic() {
 	testCases := []struct {
 		name       string
 		packetData types.InterchainAccountPacketData
-		expPass    bool
+		expErr     error
 	}{
 		{
 			"success",
@@ -19,7 +20,7 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 				Data: []byte("data"),
 				Memo: "memo",
 			},
-			true,
+			nil,
 		},
 		{
 			"success, empty memo",
@@ -27,7 +28,7 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 				Type: types.EXECUTE_TX,
 				Data: []byte("data"),
 			},
-			true,
+			nil,
 		},
 		{
 			"type unspecified",
@@ -36,7 +37,7 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 				Data: []byte("data"),
 				Memo: "memo",
 			},
-			false,
+			types.ErrInvalidOutgoingData,
 		},
 		{
 			"empty data",
@@ -45,7 +46,7 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 				Data: []byte{},
 				Memo: "memo",
 			},
-			false,
+			types.ErrInvalidOutgoingData,
 		},
 		{
 			"nil data",
@@ -54,16 +55,16 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 				Data: nil,
 				Memo: "memo",
 			},
-			false,
+			types.ErrInvalidOutgoingData,
 		},
 		{
 			"memo too large",
 			types.InterchainAccountPacketData{
 				Type: types.EXECUTE_TX,
 				Data: []byte("data"),
-				Memo: largeMemo,
+				Memo: ibctesting.GenerateString(types.MaxMemoCharLength + 1),
 			},
-			false,
+			types.ErrInvalidOutgoingData,
 		},
 	}
 
@@ -74,11 +75,132 @@ func (suite *TypesTestSuite) TestValidateBasic() {
 
 			err := tc.packetData.ValidateBasic()
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 			} else {
 				suite.Require().Error(err)
+				suite.Require().ErrorIs(err, tc.expErr)
 			}
 		})
 	}
+}
+
+func (suite *TypesTestSuite) TestGetPacketSender() {
+	testCases := []struct {
+		name      string
+		srcPortID string
+		expSender string
+	}{
+		{
+			"success: port id has prefix",
+			types.ControllerPortPrefix + ibctesting.TestAccAddress,
+			ibctesting.TestAccAddress,
+		},
+		{
+			"failure: missing prefix",
+			ibctesting.TestAccAddress,
+			"",
+		},
+		{
+			"failure: empty port id",
+			"",
+			"",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+
+		packetData := types.InterchainAccountPacketData{}
+		suite.Require().Equal(tc.expSender, packetData.GetPacketSender(tc.srcPortID))
+	}
+}
+
+func (suite *TypesTestSuite) TestPacketDataProvider() {
+	expCallbackAddr := ibctesting.TestAccAddress
+
+	testCases := []struct {
+		name          string
+		packetData    types.InterchainAccountPacketData
+		expCustomData interface{}
+	}{
+		{
+			"success: src_callback key in memo",
+			types.InterchainAccountPacketData{
+				Type: types.EXECUTE_TX,
+				Data: []byte("data"),
+				Memo: fmt.Sprintf(`{"src_callback": {"address": "%s"}}`, expCallbackAddr),
+			},
+			map[string]interface{}{
+				"address": expCallbackAddr,
+			},
+		},
+		{
+			"success: src_callback key in memo with additional fields",
+			types.InterchainAccountPacketData{
+				Type: types.EXECUTE_TX,
+				Data: []byte("data"),
+				Memo: fmt.Sprintf(`{"src_callback": {"address": "%s", "gas_limit": "200000"}}`, expCallbackAddr),
+			},
+			map[string]interface{}{
+				"address":   expCallbackAddr,
+				"gas_limit": "200000",
+			},
+		},
+		{
+			"success: src_callback has string value",
+			types.InterchainAccountPacketData{
+				Type: types.EXECUTE_TX,
+				Data: []byte("data"),
+				Memo: `{"src_callback": "string"}`,
+			},
+			"string",
+		},
+		{
+			"failure: empty memo",
+			types.InterchainAccountPacketData{
+				Type: types.EXECUTE_TX,
+				Data: []byte("data"),
+				Memo: "",
+			},
+			nil,
+		},
+		{
+			"failure: non-json memo",
+			types.InterchainAccountPacketData{
+				Type: types.EXECUTE_TX,
+				Data: []byte("data"),
+				Memo: "invalid",
+			},
+			nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+
+		customData := tc.packetData.GetCustomPacketData("src_callback")
+		suite.Require().Equal(tc.expCustomData, customData)
+	}
+}
+
+func (suite *TypesTestSuite) TestPacketDataUnmarshalerInterface() {
+	expPacketData := types.InterchainAccountPacketData{
+		Type: types.EXECUTE_TX,
+		Data: []byte("data"),
+		Memo: "some memo",
+	}
+
+	var packetData types.InterchainAccountPacketData
+	err := packetData.UnmarshalJSON(expPacketData.GetBytes())
+	suite.Require().NoError(err)
+	suite.Require().Equal(expPacketData, packetData)
+
+	// test invalid packet data
+	invalidPacketDataBytes := []byte("invalid packet data")
+
+	var invalidPacketData types.InterchainAccountPacketData
+	err = packetData.UnmarshalJSON(invalidPacketDataBytes)
+	suite.Require().Error(err)
+	suite.Require().Equal(types.InterchainAccountPacketData{}, invalidPacketData)
 }

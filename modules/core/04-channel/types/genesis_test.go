@@ -5,7 +5,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
 )
 
 const (
@@ -26,12 +28,12 @@ func TestValidateGenesis(t *testing.T) {
 	testCases := []struct {
 		name     string
 		genState types.GenesisState
-		expPass  bool
+		expErr   error
 	}{
 		{
 			name:     "default",
 			genState: types.DefaultGenesisState(),
-			expPass:  true,
+			expErr:   nil,
 		},
 		{
 			name: "valid genesis",
@@ -67,8 +69,9 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort2, testChannel2, 1),
 				},
 				2,
+				types.Params{UpgradeTimeout: types.DefaultTimeout},
 			),
-			expPass: true,
+			expErr: nil,
 		},
 		{
 			name: "invalid channel",
@@ -81,7 +84,7 @@ func TestValidateGenesis(t *testing.T) {
 					),
 				},
 			},
-			expPass: false,
+			expErr: host.ErrInvalidID,
 		},
 		{
 			name: "invalid ack",
@@ -90,7 +93,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketState(testPort2, testChannel2, 1, nil),
 				},
 			},
-			expPass: false,
+			expErr: types.ErrInvalidAcknowledgement,
 		},
 		{
 			name: "invalid commitment",
@@ -99,7 +102,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketState(testPort1, testChannel1, 1, nil),
 				},
 			},
-			expPass: false,
+			expErr: types.ErrInvalidCommitment,
 		},
 		{
 			name: "invalid send seq",
@@ -108,7 +111,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort1, testChannel1, 0),
 				},
 			},
-			expPass: false,
+			expErr: ibcerrors.ErrInvalidSequence,
 		},
 		{
 			name: "invalid recv seq",
@@ -117,7 +120,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort1, "(testChannel1)", 1),
 				},
 			},
-			expPass: false,
+			expErr: host.ErrInvalidID,
 		},
 		{
 			name: "invalid recv seq 2",
@@ -126,7 +129,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence("(testPort1)", testChannel1, 1),
 				},
 			},
-			expPass: false,
+			expErr: host.ErrInvalidID,
 		},
 		{
 			name: "invalid ack seq",
@@ -135,7 +138,7 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort1, "(testChannel1)", 1),
 				},
 			},
-			expPass: false,
+			expErr: types.ErrInvalidAcknowledgement,
 		},
 		{
 			name: "invalid channel identifier",
@@ -171,8 +174,9 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort2, testChannel2, 1),
 				},
 				0,
+				types.Params{UpgradeTimeout: types.DefaultTimeout},
 			),
-			expPass: false,
+			expErr: host.ErrInvalidID,
 		},
 		{
 			name: "next channel sequence is less than maximum channel identifier sequence used",
@@ -208,18 +212,20 @@ func TestValidateGenesis(t *testing.T) {
 					types.NewPacketSequence(testPort2, testChannel2, 1),
 				},
 				0,
+				types.Params{UpgradeTimeout: types.DefaultTimeout},
 			),
-			expPass: false,
+			expErr: ibcerrors.ErrInvalidSequence,
 		},
 	}
 
 	for _, tc := range testCases {
 		tc := tc
 		err := tc.genState.Validate()
-		if tc.expPass {
+		if tc.expErr == nil {
 			require.NoError(t, err, tc.name)
 		} else {
 			require.Error(t, err, tc.name)
+			require.ErrorIs(t, err, tc.expErr)
 		}
 	}
 }

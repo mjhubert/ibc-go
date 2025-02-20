@@ -3,8 +3,8 @@ package types
 import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 var (
@@ -50,7 +50,7 @@ func NewQueryConnectionClientStateResponse(identifiedClientState clienttypes.Ide
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (qccsr QueryConnectionClientStateResponse) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return qccsr.IdentifiedClientState.UnpackInterfaces(unpacker)
 }
@@ -65,7 +65,7 @@ func NewQueryConnectionConsensusStateResponse(clientID string, anyConsensusState
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (qccsr QueryConnectionConsensusStateResponse) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return unpacker.UnpackAny(qccsr.ConsensusState, new(exported.ConsensusState))
 }

@@ -5,8 +5,8 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
+	"github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
 )
 
 // emitIncentivizedPacketEvent emits an event containing information on the total amount of fees incentivizing
@@ -26,7 +26,6 @@ func emitIncentivizedPacketEvent(ctx sdk.Context, packetID channeltypes.PacketId
 			totalTimeoutFees = totalTimeoutFees.Add(fee.Fee.TimeoutFee...)
 		}
 	}
-
 	ctx.EventManager().EmitEvents(sdk.Events{
 		sdk.NewEvent(
 			types.EventTypeIncentivizedPacket,

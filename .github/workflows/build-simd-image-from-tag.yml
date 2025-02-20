@@ -18,15 +18,15 @@ env:
    GIT_TAG: "${{ inputs.tag }}"
 
 jobs:
-   build-image-at-tag:
-      runs-on: ubuntu-latest
+    build-image-at-tag:
+      runs-on: depot-ubuntu-22.04-4
       steps:
-         - uses: actions/checkout@v3
+         - uses: actions/checkout@v4
            with:
             ref: "${{ env.GIT_TAG }}"
             fetch-depth: 0
          - name: Log in to the Container registry
-           uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+           uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
            with:
               registry: ${{ env.REGISTRY }}
               username: ${{ github.actor }}
@@ -34,6 +34,6 @@ jobs:
          - name: Build image
            run: |
             # remove any `/` characters from the docker tag and replace them with a -
-            docker_tag="$(echo $GIT_TAG | sed 's/\//-/')"
+            docker_tag="$(echo $GIT_TAG | sed 's/[^a-zA-Z0-9\.]/-/g')"
             docker build . -t "${REGISTRY}/${ORG}/${IMAGE_NAME}:${docker_tag}" --build-arg IBC_GO_VERSION=${{ inputs.ibc-go-version }}
             docker push "${REGISTRY}/${ORG}/${IMAGE_NAME}:${docker_tag}"

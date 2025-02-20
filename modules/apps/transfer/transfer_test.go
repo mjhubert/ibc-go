@@ -3,16 +3,19 @@ package transfer_test
 import (
 	"testing"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/stretchr/testify/suite"
+	testifysuite "github.com/stretchr/testify/suite"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	sdkmath "cosmossdk.io/math"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 type TransferTestSuite struct {
-	suite.Suite
+	testifysuite.Suite
 
 	coordinator *ibctesting.Coordinator
 
@@ -29,117 +32,170 @@ func (suite *TransferTestSuite) SetupTest() {
 	suite.chainC = suite.coordinator.GetChain(ibctesting.GetChainID(3))
 }
 
-func NewTransferPath(chainA, chainB *ibctesting.TestChain) *ibctesting.Path {
-	path := ibctesting.NewPath(chainA, chainB)
-	path.EndpointA.ChannelConfig.PortID = ibctesting.TransferPort
-	path.EndpointB.ChannelConfig.PortID = ibctesting.TransferPort
-	path.EndpointA.ChannelConfig.Version = types.Version
-	path.EndpointB.ChannelConfig.Version = types.Version
-
-	return path
-}
-
 // Constructs the following sends based on the established channels/connections
 // 1 - from chainA to chainB
 // 2 - from chainB to chainC
 // 3 - from chainC to chainB
 func (suite *TransferTestSuite) TestHandleMsgTransfer() {
-	// setup between chainA and chainB
-	// NOTE:
-	// pathAtoB.EndpointA = endpoint on chainA
-	// pathAtoB.EndpointB = endpoint on chainB
-	pathAtoB := NewTransferPath(suite.chainA, suite.chainB)
-	suite.coordinator.Setup(pathAtoB)
+	var (
+		sourceDenomToTransfer string
+		msgAmount             sdkmath.Int
+	)
 
-	originalBalance := suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), suite.chainA.SenderAccount.GetAddress(), sdk.DefaultBondDenom)
-	timeoutHeight := clienttypes.NewHeight(1, 110)
+	testCases := []struct {
+		name     string
+		malleate func()
+	}{
+		{
+			"transfer single denom",
+			func() {},
+		},
+		{
+			"transfer amount larger than int64",
+			func() {
+				var ok bool
+				msgAmount, ok = sdkmath.NewIntFromString("9223372036854775808") // 2^63 (one above int64)
+				suite.Require().True(ok)
+			},
+		},
+		{
+			"transfer entire balance",
+			func() {
+				msgAmount = types.UnboundedSpendLimit()
+			},
+		},
+	}
 
-	amount, ok := sdk.NewIntFromString("9223372036854775808") // 2^63 (one above int64)
-	suite.Require().True(ok)
-	coinToSendToB := sdk.NewCoin(sdk.DefaultBondDenom, amount)
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			suite.SetupTest() // reset
 
-	// send from chainA to chainB
-	msg := types.NewMsgTransfer(pathAtoB.EndpointA.ChannelConfig.PortID, pathAtoB.EndpointA.ChannelID, coinToSendToB, suite.chainA.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
-	res, err := suite.chainA.SendMsgs(msg)
-	suite.Require().NoError(err) // message committed
+			// setup between chainA and chainB
+			// NOTE:
+			// pathAToB.EndpointA = endpoint on chainA
+			// pathAToB.EndpointB = endpoint on chainB
+			pathAToB := ibctesting.NewTransferPath(suite.chainA, suite.chainB)
+			pathAToB.Setup()
+			traceAToB := types.NewHop(pathAToB.EndpointB.ChannelConfig.PortID, pathAToB.EndpointB.ChannelID)
 
-	packet, err := ibctesting.ParsePacketFromEvents(res.GetEvents())
-	suite.Require().NoError(err)
+			sourceDenomToTransfer = sdk.DefaultBondDenom
+			msgAmount = ibctesting.DefaultCoinAmount
 
-	// relay send
-	err = pathAtoB.RelayPacket(packet)
-	suite.Require().NoError(err) // relay committed
+			tc.malleate()
 
-	// check that module account escrow address has locked the tokens
-	escrowAddress := types.GetEscrowAddress(packet.GetSourcePort(), packet.GetSourceChannel())
-	balance := suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), escrowAddress, sdk.DefaultBondDenom)
-	suite.Require().Equal(coinToSendToB, balance)
+			originalBalance := suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), suite.chainA.SenderAccount.GetAddress(), sourceDenomToTransfer)
 
-	// check that voucher exists on chain B
-	voucherDenomTrace := types.ParseDenomTrace(types.GetPrefixedDenom(packet.GetDestPort(), packet.GetDestChannel(), sdk.DefaultBondDenom))
-	balance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), voucherDenomTrace.IBCDenom())
-	coinSentFromAToB := types.GetTransferCoin(pathAtoB.EndpointB.ChannelConfig.PortID, pathAtoB.EndpointB.ChannelID, sdk.DefaultBondDenom, amount)
-	suite.Require().Equal(coinSentFromAToB, balance)
+			timeoutHeight := clienttypes.NewHeight(1, 110)
 
-	// setup between chainB to chainC
-	// NOTE:
-	// pathBtoC.EndpointA = endpoint on chainB
-	// pathBtoC.EndpointB = endpoint on chainC
-	pathBtoC := NewTransferPath(suite.chainB, suite.chainC)
-	suite.coordinator.Setup(pathBtoC)
+			originalCoin := sdk.NewCoin(sourceDenomToTransfer, msgAmount)
 
-	// send from chainB to chainC
-	msg = types.NewMsgTransfer(pathBtoC.EndpointA.ChannelConfig.PortID, pathBtoC.EndpointA.ChannelID, coinSentFromAToB, suite.chainB.SenderAccount.GetAddress().String(), suite.chainC.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
-	res, err = suite.chainB.SendMsgs(msg)
-	suite.Require().NoError(err) // message committed
+			// send from chainA to chainB
+			msg := types.NewMsgTransfer(pathAToB.EndpointA.ChannelConfig.PortID, pathAToB.EndpointA.ChannelID, originalCoin, suite.chainA.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
+			res, err := suite.chainA.SendMsgs(msg)
+			suite.Require().NoError(err) // message committed
 
-	packet, err = ibctesting.ParsePacketFromEvents(res.GetEvents())
-	suite.Require().NoError(err)
+			packet, err := ibctesting.ParsePacketFromEvents(res.Events)
+			suite.Require().NoError(err)
 
-	err = pathBtoC.RelayPacket(packet)
-	suite.Require().NoError(err) // relay committed
+			// Get the packet data to determine the amount of tokens being transferred (needed for sending entire balance)
+			packetData, err := types.UnmarshalPacketData(packet.GetData(), pathAToB.EndpointA.GetChannel().Version, "")
+			suite.Require().NoError(err)
+			transferAmount, ok := sdkmath.NewIntFromString(packetData.Token.Amount)
+			suite.Require().True(ok)
 
-	// NOTE: fungible token is prefixed with the full trace in order to verify the packet commitment
-	fullDenomPath := types.GetPrefixedDenom(pathBtoC.EndpointB.ChannelConfig.PortID, pathBtoC.EndpointB.ChannelID, voucherDenomTrace.GetFullDenomPath())
+			// relay send
+			err = pathAToB.RelayPacket(packet)
+			suite.Require().NoError(err) // relay committed
 
-	// check that the balance is updated on chainC
-	coinSentFromBToC := sdk.NewCoin(types.ParseDenomTrace(fullDenomPath).IBCDenom(), amount)
-	balance = suite.chainC.GetSimApp().BankKeeper.GetBalance(suite.chainC.GetContext(), suite.chainC.SenderAccount.GetAddress(), coinSentFromBToC.Denom)
-	suite.Require().Equal(coinSentFromBToC, balance)
+			escrowAddress := types.GetEscrowAddress(packet.GetSourcePort(), packet.GetSourceChannel())
+			// check that the balance for chainA is updated
+			chainABalance := suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), suite.chainA.SenderAccount.GetAddress(), originalCoin.Denom)
+			suite.Require().True(originalBalance.Amount.Sub(transferAmount).Equal(chainABalance.Amount))
 
-	// check that balance on chain B is empty
-	balance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), coinSentFromBToC.Denom)
-	suite.Require().Zero(balance.Amount.Int64())
+			// check that module account escrow address has locked the tokens
+			chainAEscrowBalance := suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), escrowAddress, originalCoin.Denom)
+			suite.Require().True(transferAmount.Equal(chainAEscrowBalance.Amount))
 
-	// send from chainC back to chainB
-	msg = types.NewMsgTransfer(pathBtoC.EndpointB.ChannelConfig.PortID, pathBtoC.EndpointB.ChannelID, coinSentFromBToC, suite.chainC.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
-	res, err = suite.chainC.SendMsgs(msg)
-	suite.Require().NoError(err) // message committed
+			// check that voucher exists on chain B
+			chainBDenom := types.NewDenom(originalCoin.Denom, traceAToB)
+			chainBBalance := suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), chainBDenom.IBCDenom())
+			coinSentFromAToB := sdk.NewCoin(chainBDenom.IBCDenom(), transferAmount)
+			suite.Require().Equal(coinSentFromAToB, chainBBalance)
 
-	packet, err = ibctesting.ParsePacketFromEvents(res.GetEvents())
-	suite.Require().NoError(err)
+			// setup between chainB to chainC
+			// NOTE:
+			// pathBToC.EndpointA = endpoint on chainB
+			// pathBToC.EndpointB = endpoint on chainC
+			pathBToC := ibctesting.NewTransferPath(suite.chainB, suite.chainC)
+			pathBToC.Setup()
+			traceBToC := types.NewHop(pathBToC.EndpointB.ChannelConfig.PortID, pathBToC.EndpointB.ChannelID)
 
-	err = pathBtoC.RelayPacket(packet)
-	suite.Require().NoError(err) // relay committed
+			// send from chainB to chainC
+			msg = types.NewMsgTransfer(pathBToC.EndpointA.ChannelConfig.PortID, pathBToC.EndpointA.ChannelID, coinSentFromAToB, suite.chainB.SenderAccount.GetAddress().String(), suite.chainC.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
+			res, err = suite.chainB.SendMsgs(msg)
+			suite.Require().NoError(err) // message committed
 
-	// check that balance on chain A is updated
-	balance = suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), suite.chainA.SenderAccount.GetAddress(), sdk.DefaultBondDenom)
-	suite.Require().Equal(originalBalance.SubAmount(amount).Amount.Int64(), balance.Amount.Int64())
+			packet, err = ibctesting.ParsePacketFromEvents(res.Events)
+			suite.Require().NoError(err)
 
-	// check that balance on chain B has the transferred amount
-	balance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), coinSentFromAToB.Denom)
-	suite.Require().Equal(coinSentFromAToB, balance)
+			err = pathBToC.RelayPacket(packet)
+			suite.Require().NoError(err) // relay committed
 
-	// check that module account escrow address is empty
-	escrowAddress = types.GetEscrowAddress(packet.GetDestPort(), packet.GetDestChannel())
-	balance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), escrowAddress, coinSentFromAToB.Denom)
-	suite.Require().Zero(balance.Amount.Int64())
+			coinsSentFromBToC := sdk.NewCoins()
+			// check balances for chainB and chainC after transfer from chainB to chainC
+			// NOTE: fungible token is prefixed with the full trace in order to verify the packet commitment
+			chainCDenom := types.NewDenom(originalCoin.Denom, traceBToC, traceAToB)
 
-	// check that balance on chain C is empty
-	balance = suite.chainC.GetSimApp().BankKeeper.GetBalance(suite.chainC.GetContext(), suite.chainC.SenderAccount.GetAddress(), voucherDenomTrace.IBCDenom())
-	suite.Require().Zero(balance.Amount.Int64())
+			// check that the balance is updated on chainC
+			coinSentFromBToC := sdk.NewCoin(chainCDenom.IBCDenom(), transferAmount)
+			chainCBalance := suite.chainC.GetSimApp().BankKeeper.GetBalance(suite.chainC.GetContext(), suite.chainC.SenderAccount.GetAddress(), coinSentFromBToC.Denom)
+			suite.Require().Equal(coinSentFromBToC, chainCBalance)
+
+			// check that balance on chain B is empty
+			chainBBalance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), coinSentFromBToC.Denom)
+			suite.Require().Zero(chainBBalance.Amount.Int64())
+
+			// send from chainC back to chainB
+			msg = types.NewMsgTransfer(pathBToC.EndpointB.ChannelConfig.PortID, pathBToC.EndpointB.ChannelID, coinSentFromBToC, suite.chainC.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(), timeoutHeight, 0, "")
+			res, err = suite.chainC.SendMsgs(msg)
+			suite.Require().NoError(err) // message committed
+
+			packet, err = ibctesting.ParsePacketFromEvents(res.Events)
+			suite.Require().NoError(err)
+
+			err = pathBToC.RelayPacket(packet)
+			suite.Require().NoError(err) // relay committed
+
+			// check balances for chainC are empty after transfer from chainC to chainB
+			for _, coin := range coinsSentFromBToC {
+				// check that balance on chain C is empty
+				chainCBalance := suite.chainC.GetSimApp().BankKeeper.GetBalance(suite.chainC.GetContext(), suite.chainC.SenderAccount.GetAddress(), coin.Denom)
+				suite.Require().Zero(chainCBalance.Amount.Int64())
+			}
+
+			// check balances for chainB after transfer from chainC to chainB
+			// check that balance on chain B has the transferred amount
+			chainBBalance = suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), suite.chainB.SenderAccount.GetAddress(), coinSentFromAToB.Denom)
+			suite.Require().Equal(coinSentFromAToB, chainBBalance)
+
+			// check that module account escrow address is empty
+			escrowAddress = types.GetEscrowAddress(traceBToC.PortId, traceBToC.ChannelId)
+			chainBEscrowBalance := suite.chainB.GetSimApp().BankKeeper.GetBalance(suite.chainB.GetContext(), escrowAddress, coinSentFromAToB.Denom)
+			suite.Require().Zero(chainBEscrowBalance.Amount.Int64())
+
+			// check balances for chainA after transfer from chainC to chainB
+			// check that the balance is unchanged
+			chainABalance = suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), suite.chainA.SenderAccount.GetAddress(), originalCoin.Denom)
+			suite.Require().True(originalBalance.Amount.Sub(transferAmount).Equal(chainABalance.Amount))
+
+			// check that module account escrow address is unchanged
+			escrowAddress = types.GetEscrowAddress(pathAToB.EndpointA.ChannelConfig.PortID, pathAToB.EndpointA.ChannelID)
+			chainAEscrowBalance = suite.chainA.GetSimApp().BankKeeper.GetBalance(suite.chainA.GetContext(), escrowAddress, originalCoin.Denom)
+			suite.Require().True(transferAmount.Equal(chainAEscrowBalance.Amount))
+		})
+	}
 }
 
 func TestTransferTestSuite(t *testing.T) {
-	suite.Run(t, new(TransferTestSuite))
+	testifysuite.Run(t, new(TransferTestSuite))
 }

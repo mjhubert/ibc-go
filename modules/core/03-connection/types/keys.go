@@ -6,7 +6,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 )
 
 // FormatConnectionIdentifier returns the connection identifier with the sequence appended.
-// This is a SDK specific format not enforced by IBC protocol.
+// This is an SDK specific format not enforced by IBC protocol.
 func FormatConnectionIdentifier(sequence uint64) string {
 	return fmt.Sprintf("%s%d", ConnectionPrefix, sequence)
 }

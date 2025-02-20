@@ -8,8 +8,8 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 const (
@@ -28,10 +28,17 @@ const (
 
 	// ParamsKey is the store key for the IBC client parameters
 	ParamsKey = "clientParams"
+
+	// KeyCreator is the key for the creator in the client-specific store
+	KeyCreator = "creator"
+
+	// AllowAllClients is the value that if set in AllowedClients param
+	// would allow any wired up light client modules to be allowed
+	AllowAllClients = "*"
 )
 
 // FormatClientIdentifier returns the client identifier with the sequence appended.
-// This is a SDK specific format not enforced by IBC protocol.
+// This is an SDK specific format not enforced by IBC protocol.
 func FormatClientIdentifier(clientType string, sequence uint64) string {
 	return fmt.Sprintf("%s-%d", clientType, sequence)
 }
@@ -41,7 +48,7 @@ func FormatClientIdentifier(clientType string, sequence uint64) string {
 // which per the specification only permits ASCII for the {client-type} segment and
 // 1 to 20 digits for the {N} segment.
 // `([\w-]+\w)?` allows for a letter or hyphen, with the {client-type} starting with a letter
-// and ending with a letter, i.e. `letter+(letter|hypen+letter)?`.
+// and ending with a letter, i.e. `letter+(letter|hyphen+letter)?`.
 var IsClientIDFormat = regexp.MustCompile(`^\w+([\w-]+\w)?-[0-9]{1,20}$`).MatchString
 
 // IsValidClientID checks if the clientID is valid and can be parsed into the client
@@ -75,4 +82,20 @@ func ParseClientIdentifier(clientID string) (string, uint64, error) {
 	}
 
 	return clientType, sequence, nil
+}
+
+// MustParseClientIdentifier parses the client type from the provided client identifier.
+// If an invalid client identifier is provided this function will panic.
+func MustParseClientIdentifier(clientID string) string {
+	clientType, _, err := ParseClientIdentifier(clientID)
+	if err != nil {
+		panic(err)
+	}
+
+	return clientType
+}
+
+// CreatorKey returns the key under which the client creator is stored in the client store
+func CreatorKey() []byte {
+	return []byte(KeyCreator)
 }

@@ -4,25 +4,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	kmultisig "github.com/cosmos/cosmos-sdk/crypto/keys/multisig"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	"github.com/cosmos/cosmos-sdk/crypto/types/multisig"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
-	"github.com/stretchr/testify/require"
 
-	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	connectiontypes "github.com/cosmos/ibc-go/v7/modules/core/03-connection/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	commitmenttypes "github.com/cosmos/ibc-go/v7/modules/core/23-commitment/types"
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
-	solomachine "github.com/cosmos/ibc-go/v7/modules/light-clients/06-solomachine"
-	ibctm "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
+	transfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	connectiontypes "github.com/cosmos/ibc-go/v10/modules/core/03-connection/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	commitmenttypes "github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types"
+	commitmenttypesv2 "github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types/v2"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
+	solomachine "github.com/cosmos/ibc-go/v10/modules/light-clients/06-solomachine"
 )
 
 var (
@@ -53,6 +53,7 @@ type Solomachine struct {
 // generated private/public key pairs and a sequence starting at 1. If nKeys
 // is greater than 1 then a multisig public key is used.
 func NewSolomachine(t *testing.T, cdc codec.BinaryCodec, clientID, diversifier string, nKeys uint64) *Solomachine {
+	t.Helper()
 	privKeys, pubKeys, pk := GenerateKeys(t, nKeys)
 
 	return &Solomachine{
@@ -77,6 +78,7 @@ func NewSolomachine(t *testing.T, cdc codec.BinaryCodec, clientID, diversifier s
 // interface, if needed. The same is true for the amino based Multisignature
 // public key.
 func GenerateKeys(t *testing.T, n uint64) ([]cryptotypes.PrivKey, []cryptotypes.PubKey, cryptotypes.PubKey) {
+	t.Helper()
 	require.NotEqual(t, uint64(0), n, "generation of zero keys is not allowed")
 
 	privKeys := make([]cryptotypes.PrivKey, n)
@@ -128,7 +130,7 @@ func (solo *Solomachine) CreateClient(chain *TestChain) string {
 	require.NoError(solo.t, err)
 	require.NotNil(solo.t, res)
 
-	clientID, err := ParseClientIDFromEvents(res.GetEvents())
+	clientID, err := ParseClientIDFromEvents(res.Events)
 	require.NoError(solo.t, err)
 
 	return clientID
@@ -197,7 +199,7 @@ func (solo *Solomachine) CreateHeader(newDiversifier string) *solomachine.Header
 // CreateMisbehaviour constructs testing misbehaviour for the solo machine client
 // by signing over two different data bytes at the same sequence.
 func (solo *Solomachine) CreateMisbehaviour() *solomachine.Misbehaviour {
-	merklePath := solo.GetClientStatePath("counterparty")
+	merklePath := commitmenttypes.NewMerklePath(host.FullClientStateKey("counterparty"))
 	path, err := solo.cdc.Marshal(&merklePath)
 	require.NoError(solo.t, err)
 
@@ -226,7 +228,7 @@ func (solo *Solomachine) CreateMisbehaviour() *solomachine.Misbehaviour {
 	// misbehaviour signaturess can have different timestamps
 	solo.Time++
 
-	merklePath = solo.GetConsensusStatePath("counterparty", clienttypes.NewHeight(0, 1))
+	merklePath = commitmenttypes.NewMerklePath(host.FullConsensusStateKey("counterparty", clienttypes.NewHeight(0, 1)))
 	path, err = solo.cdc.Marshal(&merklePath)
 	require.NoError(solo.t, err)
 
@@ -272,7 +274,7 @@ func (solo *Solomachine) ConnOpenInit(chain *TestChain, clientID string) string 
 	require.NoError(solo.t, err)
 	require.NotNil(solo.t, res)
 
-	connectionID, err := ParseConnectionIDFromEvents(res.GetEvents())
+	connectionID, err := ParseConnectionIDFromEvents(res.Events)
 	require.NoError(solo.t, err)
 
 	return connectionID
@@ -281,20 +283,11 @@ func (solo *Solomachine) ConnOpenInit(chain *TestChain, clientID string) string 
 // ConnOpenAck performs the connection open ack handshake step on the tendermint chain for the associated
 // solo machine client.
 func (solo *Solomachine) ConnOpenAck(chain *TestChain, clientID, connectionID string) {
-	proofTry := solo.GenerateConnOpenTryProof(clientID, connectionID)
-
-	clientState := ibctm.NewClientState(chain.ChainID, DefaultTrustLevel, TrustingPeriod, UnbondingPeriod, MaxClockDrift, chain.LastHeader.GetHeight().(clienttypes.Height), commitmenttypes.GetSDKSpecs(), UpgradePath)
-	proofClient := solo.GenerateClientStateProof(clientState)
-
-	consensusState := chain.LastHeader.ConsensusState()
-	consensusHeight := chain.LastHeader.GetHeight()
-	proofConsensus := solo.GenerateConsensusStateProof(consensusState, consensusHeight)
+	tryProof := solo.GenerateConnOpenTryProof(clientID, connectionID)
 
 	msgConnOpenAck := connectiontypes.NewMsgConnectionOpenAck(
-		connectionID, connectionIDSolomachine, clientState,
-		proofTry, proofClient, proofConsensus,
-		clienttypes.ZeroHeight(), clientState.GetLatestHeight().(clienttypes.Height),
-		ConnectionVersion,
+		connectionID, connectionIDSolomachine, tryProof,
+		clienttypes.ZeroHeight(), ConnectionVersion,
 		chain.SenderAccount.GetAddress().String(),
 	)
 
@@ -307,7 +300,7 @@ func (solo *Solomachine) ConnOpenAck(chain *TestChain, clientID, connectionID st
 func (solo *Solomachine) ChanOpenInit(chain *TestChain, connectionID string) string {
 	msgChanOpenInit := channeltypes.NewMsgChannelOpenInit(
 		transfertypes.PortID,
-		transfertypes.Version,
+		transfertypes.V1,
 		channeltypes.UNORDERED,
 		[]string{connectionID},
 		transfertypes.PortID,
@@ -318,23 +311,22 @@ func (solo *Solomachine) ChanOpenInit(chain *TestChain, connectionID string) str
 	require.NoError(solo.t, err)
 	require.NotNil(solo.t, res)
 
-	if res, ok := res.MsgResponses[0].GetCachedValue().(*channeltypes.MsgChannelOpenInitResponse); ok {
-		return res.ChannelId
-	}
+	channelID, err := ParseChannelIDFromEvents(res.Events)
+	require.NoError(solo.t, err)
 
-	return ""
+	return channelID
 }
 
 // ChanOpenAck performs the channel open ack handshake step on the tendermint chain for the associated
 // solo machine client.
 func (solo *Solomachine) ChanOpenAck(chain *TestChain, channelID string) {
-	proofTry := solo.GenerateChanOpenTryProof(transfertypes.PortID, transfertypes.Version, channelID)
+	tryProof := solo.GenerateChanOpenTryProof(transfertypes.PortID, transfertypes.V1, channelID)
 	msgChanOpenAck := channeltypes.NewMsgChannelOpenAck(
 		transfertypes.PortID,
 		channelID,
 		channelIDSolomachine,
-		transfertypes.Version,
-		proofTry,
+		transfertypes.V1,
+		tryProof,
 		clienttypes.ZeroHeight(),
 		chain.SenderAccount.GetAddress().String(),
 	)
@@ -347,13 +339,14 @@ func (solo *Solomachine) ChanOpenAck(chain *TestChain, channelID string) {
 // ChanCloseConfirm performs the channel close confirm handshake step on the tendermint chain for the associated
 // solo machine client.
 func (solo *Solomachine) ChanCloseConfirm(chain *TestChain, portID, channelID string) {
-	proofInit := solo.GenerateChanClosedProof(portID, transfertypes.Version, channelID)
+	initProof := solo.GenerateChanClosedProof(portID, transfertypes.V1, channelID)
 	msgChanCloseConfirm := channeltypes.NewMsgChannelCloseConfirm(
 		portID,
 		channelID,
-		proofInit,
+		initProof,
 		clienttypes.ZeroHeight(),
 		chain.SenderAccount.GetAddress().String(),
+		0, // use default value for channel that hasn't undergone an upgrade
 	)
 
 	res, err := chain.SendMsgs(msgChanCloseConfirm)
@@ -364,24 +357,25 @@ func (solo *Solomachine) ChanCloseConfirm(chain *TestChain, portID, channelID st
 // SendTransfer constructs a MsgTransfer and sends the message to the given chain. Any number of optional
 // functions can be provided which will modify the MsgTransfer before SendMsgs is called.
 func (solo *Solomachine) SendTransfer(chain *TestChain, portID, channelID string, fns ...func(*transfertypes.MsgTransfer)) channeltypes.Packet {
-	msgTransfer := transfertypes.MsgTransfer{
-		SourcePort:       portID,
-		SourceChannel:    channelID,
-		Token:            sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(100)),
-		Sender:           chain.SenderAccount.GetAddress().String(),
-		Receiver:         chain.SenderAccount.GetAddress().String(),
-		TimeoutHeight:    clienttypes.ZeroHeight(),
-		TimeoutTimestamp: uint64(chain.GetContext().BlockTime().Add(time.Hour).UnixNano()),
-	}
+	msgTransfer := transfertypes.NewMsgTransfer(
+		portID,
+		channelID,
+		TestCoin,
+		chain.SenderAccount.GetAddress().String(),
+		chain.SenderAccount.GetAddress().String(),
+		clienttypes.ZeroHeight(),
+		uint64(chain.GetContext().BlockTime().Add(time.Hour).UnixNano()),
+		"",
+	)
 
 	for _, fn := range fns {
-		fn(&msgTransfer)
+		fn(msgTransfer)
 	}
 
-	res, err := chain.SendMsgs(&msgTransfer)
+	res, err := chain.SendMsgs(msgTransfer)
 	require.NoError(solo.t, err)
 
-	packet, err := ParsePacketFromEvents(res.GetEvents())
+	packet, err := ParsePacketFromEvents(res.Events)
 	require.NoError(solo.t, err)
 
 	return packet
@@ -404,11 +398,11 @@ func (solo *Solomachine) RecvPacket(chain *TestChain, packet channeltypes.Packet
 
 // AcknowledgePacket creates an acknowledgement proof and broadcasts a MsgAcknowledgement.
 func (solo *Solomachine) AcknowledgePacket(chain *TestChain, packet channeltypes.Packet) {
-	proofAck := solo.GenerateAcknowledgementProof(packet)
+	ackProof := solo.GenerateAcknowledgementProof(packet)
 	transferAck := channeltypes.NewResultAcknowledgement([]byte{byte(1)}).Acknowledgement()
 	msgAcknowledgement := channeltypes.NewMsgAcknowledgement(
 		packet, transferAck,
-		proofAck,
+		ackProof,
 		clienttypes.ZeroHeight(),
 		chain.SenderAccount.GetAddress().String(),
 	)
@@ -420,11 +414,11 @@ func (solo *Solomachine) AcknowledgePacket(chain *TestChain, packet channeltypes
 
 // TimeoutPacket creates a unreceived packet proof and broadcasts a MsgTimeout.
 func (solo *Solomachine) TimeoutPacket(chain *TestChain, packet channeltypes.Packet) {
-	proofUnreceived := solo.GenerateReceiptAbsenceProof(packet)
+	unreceivedProof := solo.GenerateReceiptAbsenceProof(packet)
 	msgTimeout := channeltypes.NewMsgTimeout(
 		packet,
 		1, // nextSequenceRecv is unused for UNORDERED channels
-		proofUnreceived,
+		unreceivedProof,
 		clienttypes.ZeroHeight(),
 		chain.SenderAccount.GetAddress().String(),
 	)
@@ -434,17 +428,18 @@ func (solo *Solomachine) TimeoutPacket(chain *TestChain, packet channeltypes.Pac
 	require.NotNil(solo.t, res)
 }
 
-// TimeoutPacket creates a channel closed and unreceived packet proof and broadcasts a MsgTimeoutOnClose.
+// TimeoutPacketOnClose creates a channel closed and unreceived packet proof and broadcasts a MsgTimeoutOnClose.
 func (solo *Solomachine) TimeoutPacketOnClose(chain *TestChain, packet channeltypes.Packet, channelID string) {
-	proofClosed := solo.GenerateChanClosedProof(transfertypes.PortID, transfertypes.Version, channelID)
-	proofUnreceived := solo.GenerateReceiptAbsenceProof(packet)
+	closedProof := solo.GenerateChanClosedProof(transfertypes.PortID, transfertypes.V1, channelID)
+	unreceivedProof := solo.GenerateReceiptAbsenceProof(packet)
 	msgTimeout := channeltypes.NewMsgTimeoutOnClose(
 		packet,
 		1, // nextSequenceRecv is unused for UNORDERED channels
-		proofUnreceived,
-		proofClosed,
+		unreceivedProof,
+		closedProof,
 		clienttypes.ZeroHeight(),
 		chain.SenderAccount.GetAddress().String(),
+		0, // use default value for channel that hasn't undergone an upgrade
 	)
 
 	res, err := chain.SendMsgs(msgTimeout)
@@ -506,40 +501,6 @@ func (solo *Solomachine) GenerateProof(signBytes *solomachine.SignBytes) []byte 
 	return proof
 }
 
-// GenerateClientStateProof generates the proof of the client state required for the connection open try and ack handshake steps.
-// The client state should be the self client states of the tendermint chain.
-func (solo *Solomachine) GenerateClientStateProof(clientState exported.ClientState) []byte {
-	data, err := clienttypes.MarshalClientState(solo.cdc, clientState)
-	require.NoError(solo.t, err)
-
-	signBytes := &solomachine.SignBytes{
-		Sequence:    solo.Sequence,
-		Timestamp:   solo.Time,
-		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetClientStatePath(clientIDSolomachine).String()),
-		Data:        data,
-	}
-
-	return solo.GenerateProof(signBytes)
-}
-
-// GenerateConsensusStateProof generates the proof of the consensus state required for the connection open try and ack handshake steps.
-// The consensus state should be the self consensus states of the tendermint chain.
-func (solo *Solomachine) GenerateConsensusStateProof(consensusState exported.ConsensusState, consensusHeight exported.Height) []byte {
-	data, err := clienttypes.MarshalConsensusState(solo.cdc, consensusState)
-	require.NoError(solo.t, err)
-
-	signBytes := &solomachine.SignBytes{
-		Sequence:    solo.Sequence,
-		Timestamp:   solo.Time,
-		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetConsensusStatePath(clientIDSolomachine, consensusHeight).String()),
-		Data:        data,
-	}
-
-	return solo.GenerateProof(signBytes)
-}
-
 // GenerateConnOpenTryProof generates the proofTry required for the connection open ack handshake step.
 // The clientID, connectionID provided represent the clientID and connectionID created on the counterparty chain, that is the tendermint chain.
 func (solo *Solomachine) GenerateConnOpenTryProof(counterpartyClientID, counterpartyConnectionID string) []byte {
@@ -549,11 +510,12 @@ func (solo *Solomachine) GenerateConnOpenTryProof(counterpartyClientID, counterp
 	data, err := solo.cdc.Marshal(&connection)
 	require.NoError(solo.t, err)
 
+	path := host.ConnectionKey(connectionIDSolomachine)
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetConnectionStatePath(connectionIDSolomachine).String()),
+		Path:        path,
 		Data:        data,
 	}
 
@@ -569,11 +531,12 @@ func (solo *Solomachine) GenerateChanOpenTryProof(portID, version, counterpartyC
 	data, err := solo.cdc.Marshal(&channel)
 	require.NoError(solo.t, err)
 
+	path := host.ChannelKey(portID, channelIDSolomachine)
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetChannelStatePath(portID, channelIDSolomachine).String()),
+		Path:        path,
 		Data:        data,
 	}
 
@@ -589,11 +552,12 @@ func (solo *Solomachine) GenerateChanClosedProof(portID, version, counterpartyCh
 	data, err := solo.cdc.Marshal(&channel)
 	require.NoError(solo.t, err)
 
+	path := host.ChannelKey(portID, channelIDSolomachine)
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetChannelStatePath(portID, channelIDSolomachine).String()),
+		Path:        path,
 		Data:        data,
 	}
 
@@ -602,13 +566,14 @@ func (solo *Solomachine) GenerateChanClosedProof(portID, version, counterpartyCh
 
 // GenerateCommitmentProof generates a commitment proof for the provided packet.
 func (solo *Solomachine) GenerateCommitmentProof(packet channeltypes.Packet) []byte {
-	commitment := channeltypes.CommitPacket(solo.cdc, packet)
+	commitment := channeltypes.CommitPacket(packet)
 
+	path := host.PacketCommitmentKey(packet.GetSourcePort(), packet.GetSourceChannel(), packet.GetSequence())
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetPacketCommitmentPath(packet.GetSourcePort(), packet.GetSourceChannel(), packet.GetSequence()).String()),
+		Path:        path,
 		Data:        commitment,
 	}
 
@@ -618,11 +583,13 @@ func (solo *Solomachine) GenerateCommitmentProof(packet channeltypes.Packet) []b
 // GenerateAcknowledgementProof generates an acknowledgement proof.
 func (solo *Solomachine) GenerateAcknowledgementProof(packet channeltypes.Packet) []byte {
 	transferAck := channeltypes.NewResultAcknowledgement([]byte{byte(1)}).Acknowledgement()
+
+	path := host.PacketAcknowledgementKey(packet.GetDestPort(), packet.GetDestChannel(), packet.GetSequence())
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetPacketAcknowledgementPath(packet.GetDestPort(), packet.GetDestChannel(), packet.GetSequence()).String()),
+		Path:        path,
 		Data:        channeltypes.CommitAcknowledgement(transferAck),
 	}
 
@@ -631,35 +598,36 @@ func (solo *Solomachine) GenerateAcknowledgementProof(packet channeltypes.Packet
 
 // GenerateReceiptAbsenceProof generates a receipt absence proof for the provided packet.
 func (solo *Solomachine) GenerateReceiptAbsenceProof(packet channeltypes.Packet) []byte {
+	path := host.PacketReceiptKey(packet.GetDestPort(), packet.GetDestChannel(), packet.GetSequence())
 	signBytes := &solomachine.SignBytes{
 		Sequence:    solo.Sequence,
 		Timestamp:   solo.Time,
 		Diversifier: solo.Diversifier,
-		Path:        []byte(solo.GetPacketReceiptPath(packet.GetDestPort(), packet.GetDestChannel(), packet.GetSequence()).String()),
+		Path:        path,
 		Data:        nil,
 	}
 	return solo.GenerateProof(signBytes)
 }
 
 // GetClientStatePath returns the commitment path for the client state.
-func (solo *Solomachine) GetClientStatePath(counterpartyClientIdentifier string) commitmenttypes.MerklePath {
-	path, err := commitmenttypes.ApplyPrefix(prefix, commitmenttypes.NewMerklePath(host.FullClientStatePath(counterpartyClientIdentifier)))
+func (solo *Solomachine) GetClientStatePath(counterpartyClientIdentifier string) commitmenttypesv2.MerklePath {
+	path, err := commitmenttypes.ApplyPrefix(prefix, commitmenttypes.NewMerklePath(host.FullClientStateKey(counterpartyClientIdentifier)))
 	require.NoError(solo.t, err)
 
 	return path
 }
 
 // GetConsensusStatePath returns the commitment path for the consensus state.
-func (solo *Solomachine) GetConsensusStatePath(counterpartyClientIdentifier string, consensusHeight exported.Height) commitmenttypes.MerklePath {
-	path, err := commitmenttypes.ApplyPrefix(prefix, commitmenttypes.NewMerklePath(host.FullConsensusStatePath(counterpartyClientIdentifier, consensusHeight)))
+func (solo *Solomachine) GetConsensusStatePath(counterpartyClientIdentifier string, consensusHeight exported.Height) commitmenttypesv2.MerklePath {
+	path, err := commitmenttypes.ApplyPrefix(prefix, commitmenttypes.NewMerklePath(host.FullConsensusStateKey(counterpartyClientIdentifier, consensusHeight)))
 	require.NoError(solo.t, err)
 
 	return path
 }
 
 // GetConnectionStatePath returns the commitment path for the connection state.
-func (solo *Solomachine) GetConnectionStatePath(connID string) commitmenttypes.MerklePath {
-	connectionPath := commitmenttypes.NewMerklePath(host.ConnectionPath(connID))
+func (solo *Solomachine) GetConnectionStatePath(connID string) commitmenttypesv2.MerklePath {
+	connectionPath := commitmenttypes.NewMerklePath(host.ConnectionKey(connID))
 	path, err := commitmenttypes.ApplyPrefix(prefix, connectionPath)
 	require.NoError(solo.t, err)
 
@@ -667,8 +635,8 @@ func (solo *Solomachine) GetConnectionStatePath(connID string) commitmenttypes.M
 }
 
 // GetChannelStatePath returns the commitment path for that channel state.
-func (solo *Solomachine) GetChannelStatePath(portID, channelID string) commitmenttypes.MerklePath {
-	channelPath := commitmenttypes.NewMerklePath(host.ChannelPath(portID, channelID))
+func (solo *Solomachine) GetChannelStatePath(portID, channelID string) commitmenttypesv2.MerklePath {
+	channelPath := commitmenttypes.NewMerklePath(host.ChannelKey(portID, channelID))
 	path, err := commitmenttypes.ApplyPrefix(prefix, channelPath)
 	require.NoError(solo.t, err)
 
@@ -676,8 +644,8 @@ func (solo *Solomachine) GetChannelStatePath(portID, channelID string) commitmen
 }
 
 // GetPacketCommitmentPath returns the commitment path for a packet commitment.
-func (solo *Solomachine) GetPacketCommitmentPath(portID, channelID string, sequence uint64) commitmenttypes.MerklePath {
-	commitmentPath := commitmenttypes.NewMerklePath(host.PacketCommitmentPath(portID, channelID, sequence))
+func (solo *Solomachine) GetPacketCommitmentPath(portID, channelID string, sequence uint64) commitmenttypesv2.MerklePath {
+	commitmentPath := commitmenttypes.NewMerklePath(host.PacketCommitmentKey(portID, channelID, sequence))
 	path, err := commitmenttypes.ApplyPrefix(prefix, commitmentPath)
 	require.NoError(solo.t, err)
 
@@ -685,8 +653,8 @@ func (solo *Solomachine) GetPacketCommitmentPath(portID, channelID string, seque
 }
 
 // GetPacketAcknowledgementPath returns the commitment path for a packet acknowledgement.
-func (solo *Solomachine) GetPacketAcknowledgementPath(portID, channelID string, sequence uint64) commitmenttypes.MerklePath {
-	ackPath := commitmenttypes.NewMerklePath(host.PacketAcknowledgementPath(portID, channelID, sequence))
+func (solo *Solomachine) GetPacketAcknowledgementPath(portID, channelID string, sequence uint64) commitmenttypesv2.MerklePath {
+	ackPath := commitmenttypes.NewMerklePath(host.PacketAcknowledgementKey(portID, channelID, sequence))
 	path, err := commitmenttypes.ApplyPrefix(prefix, ackPath)
 	require.NoError(solo.t, err)
 
@@ -695,8 +663,8 @@ func (solo *Solomachine) GetPacketAcknowledgementPath(portID, channelID string, 
 
 // GetPacketReceiptPath returns the commitment path for a packet receipt
 // and an absent receipts.
-func (solo *Solomachine) GetPacketReceiptPath(portID, channelID string, sequence uint64) commitmenttypes.MerklePath {
-	receiptPath := commitmenttypes.NewMerklePath(host.PacketReceiptPath(portID, channelID, sequence))
+func (solo *Solomachine) GetPacketReceiptPath(portID, channelID string, sequence uint64) commitmenttypesv2.MerklePath {
+	receiptPath := commitmenttypes.NewMerklePath(host.PacketReceiptKey(portID, channelID, sequence))
 	path, err := commitmenttypes.ApplyPrefix(prefix, receiptPath)
 	require.NoError(solo.t, err)
 
@@ -704,8 +672,8 @@ func (solo *Solomachine) GetPacketReceiptPath(portID, channelID string, sequence
 }
 
 // GetNextSequenceRecvPath returns the commitment path for the next sequence recv counter.
-func (solo *Solomachine) GetNextSequenceRecvPath(portID, channelID string) commitmenttypes.MerklePath {
-	nextSequenceRecvPath := commitmenttypes.NewMerklePath(host.NextSequenceRecvPath(portID, channelID))
+func (solo *Solomachine) GetNextSequenceRecvPath(portID, channelID string) commitmenttypesv2.MerklePath {
+	nextSequenceRecvPath := commitmenttypes.NewMerklePath(host.NextSequenceRecvKey(portID, channelID))
 	path, err := commitmenttypes.ApplyPrefix(prefix, nextSequenceRecvPath)
 	require.NoError(solo.t, err)
 

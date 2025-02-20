@@ -1,15 +1,22 @@
 package types_test
 
 import (
+	"errors"
 	"testing"
 
-	"github.com/cometbft/cometbft/crypto/secp256k1"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
+
+	"github.com/cometbft/cometbft/crypto/secp256k1"
+
+	modulefee "github.com/cosmos/ibc-go/v10/modules/apps/29-fee"
+	"github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 func TestMsgRegisterPayeeValidation(t *testing.T) {
@@ -18,73 +25,81 @@ func TestMsgRegisterPayeeValidation(t *testing.T) {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
+		},
+		{
+			"success: relayer and payee are equal",
+			func() {
+				msg.Relayer = defaultAccAddress
+				msg.Payee = defaultAccAddress
+			},
+			nil,
 		},
 		{
 			"invalid portID",
 			func() {
 				msg.PortId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid channelID",
 			func() {
 				msg.ChannelId = ""
 			},
-			false,
-		},
-		{
-			"invalid request relayer and payee are equal",
-			func() {
-				msg.Relayer = defaultAccAddress
-				msg.Payee = defaultAccAddress
-			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid relayer address",
 			func() {
 				msg.Relayer = invalidAddress
 			},
-			false,
+			errors.New("failed to create sdk.AccAddress from relayer address"),
 		},
 		{
 			"invalid payee address",
 			func() {
 				msg.Payee = invalidAddress
 			},
-			false,
+			errors.New("failed to create sdk.AccAddress from payee address"),
 		},
 	}
 
 	for i, tc := range testCases {
-		relayerAddr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
-		payeeAddr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
+		tc := tc
 
-		msg = types.NewMsgRegisterPayee(ibctesting.MockPort, ibctesting.FirstChannelID, relayerAddr.String(), payeeAddr.String())
+		t.Run(tc.name, func(t *testing.T) {
+			relayerAddr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
+			payeeAddr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
 
-		tc.malleate()
+			msg = types.NewMsgRegisterPayee(ibctesting.MockPort, ibctesting.FirstChannelID, relayerAddr.String(), payeeAddr.String())
 
-		err := msg.ValidateBasic()
+			tc.malleate()
 
-		if tc.expPass {
-			require.NoError(t, err, "valid test case %d failed: %s", i, tc.name)
-		} else {
-			require.Error(t, err, "invalid test case %d passed: %s", i, tc.name)
-		}
+			err := msg.ValidateBasic()
+
+			if tc.expErr == nil {
+				require.NoError(t, err, "valid test case %d failed: %s", i, tc.name)
+			} else {
+				ibctesting.RequireErrorIsOrContains(t, err, tc.expErr, err.Error())
+			}
+		})
 	}
 }
 
 func TestRegisterPayeeGetSigners(t *testing.T) {
 	accAddress := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
 	msg := types.NewMsgRegisterPayee(ibctesting.MockPort, ibctesting.FirstChannelID, accAddress.String(), defaultAccAddress)
-	require.Equal(t, []sdk.AccAddress{accAddress}, msg.GetSigners())
+
+	encodingCfg := moduletestutil.MakeTestEncodingConfig(modulefee.AppModuleBasic{})
+	signers, _, err := encodingCfg.Codec.GetMsgV1Signers(msg)
+	require.NoError(t, err)
+	require.Equal(t, accAddress.Bytes(), signers[0])
 }
 
 func TestMsgRegisterCountepartyPayeeValidation(t *testing.T) {
@@ -93,69 +108,86 @@ func TestMsgRegisterCountepartyPayeeValidation(t *testing.T) {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
 		},
 		{
 			"invalid portID",
 			func() {
 				msg.PortId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid channelID",
 			func() {
 				msg.ChannelId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"validate with incorrect destination relayer address",
 			func() {
 				msg.Relayer = invalidAddress
 			},
-			false,
+			errors.New("failed to create sdk.AccAddress from relayer address"),
 		},
 		{
 			"invalid counterparty payee address",
 			func() {
 				msg.CounterpartyPayee = ""
 			},
-			false,
+			types.ErrCounterpartyPayeeEmpty,
 		},
 		{
 			"invalid counterparty payee address: whitespaced empty string",
 			func() {
 				msg.CounterpartyPayee = "  "
 			},
-			false,
+			types.ErrCounterpartyPayeeEmpty,
+		},
+		{
+			"invalid counterparty payee address: too long",
+			func() {
+				msg.CounterpartyPayee = ibctesting.GenerateString(types.MaximumCounterpartyPayeeLength + 1)
+			},
+			ibcerrors.ErrInvalidAddress,
 		},
 	}
 
 	for i, tc := range testCases {
-		msg = types.NewMsgRegisterCounterpartyPayee(ibctesting.MockPort, ibctesting.FirstChannelID, defaultAccAddress, defaultAccAddress)
+		i, tc := i, tc
 
-		tc.malleate()
+		t.Run(tc.name, func(t *testing.T) {
+			payeeAddr, err := sdk.AccAddressFromBech32(ibctesting.TestAccAddress)
+			require.NoError(t, err)
+			msg = types.NewMsgRegisterCounterpartyPayee(ibctesting.MockPort, ibctesting.FirstChannelID, defaultAccAddress, payeeAddr.String())
 
-		err := msg.ValidateBasic()
+			tc.malleate()
 
-		if tc.expPass {
-			require.NoError(t, err, "valid test case %d failed: %s", i, tc.name)
-		} else {
-			require.Error(t, err, "invalid test case %d passed: %s", i, tc.name)
-		}
+			err = msg.ValidateBasic()
+
+			if tc.expErr == nil {
+				require.NoError(t, err, "valid test case %d failed: %s", i, tc.name)
+			} else {
+				ibctesting.RequireErrorIsOrContains(t, err, tc.expErr, err.Error())
+			}
+		})
 	}
 }
 
 func TestRegisterCountepartyAddressGetSigners(t *testing.T) {
 	accAddress := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
 	msg := types.NewMsgRegisterCounterpartyPayee(ibctesting.MockPort, ibctesting.FirstChannelID, accAddress.String(), defaultAccAddress)
-	require.Equal(t, []sdk.AccAddress{accAddress}, msg.GetSigners())
+
+	encodingCfg := moduletestutil.MakeTestEncodingConfig(modulefee.AppModuleBasic{})
+	signers, _, err := encodingCfg.Codec.GetMsgV1Signers(msg)
+	require.NoError(t, err)
+	require.Equal(t, accAddress.Bytes(), signers[0])
 }
 
 func TestMsgPayPacketFeeValidation(t *testing.T) {
@@ -164,51 +196,53 @@ func TestMsgPayPacketFeeValidation(t *testing.T) {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
 		},
 		{
 			"success with empty relayers",
 			func() {
 				msg.Relayers = []string{}
 			},
-			true,
+			nil,
 		},
 		{
 			"invalid channelID",
 			func() {
 				msg.SourceChannelId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid portID",
 			func() {
 				msg.SourcePortId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"relayers is not nil",
 			func() {
 				msg.Relayers = []string{defaultAccAddress}
 			},
-			false,
+			types.ErrRelayersNotEmpty,
 		},
 		{
 			"invalid signer address",
 			func() {
 				msg.Signer = invalidAddress
 			},
-			false,
+			errors.New("failed to convert msg.Signer into sdk.AccAddress"),
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
 		msg = types.NewMsgPayPacketFee(fee, ibctesting.MockFeePort, ibctesting.FirstChannelID, defaultAccAddress, nil)
 
@@ -216,10 +250,10 @@ func TestMsgPayPacketFeeValidation(t *testing.T) {
 
 		err := msg.ValidateBasic()
 
-		if tc.expPass {
+		if tc.expErr == nil {
 			require.NoError(t, err, tc.name)
 		} else {
-			require.Error(t, err, tc.name)
+			ibctesting.RequireErrorIsOrContains(t, err, tc.expErr, err.Error())
 		}
 	}
 }
@@ -229,21 +263,10 @@ func TestPayPacketFeeGetSigners(t *testing.T) {
 	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
 	msg := types.NewMsgPayPacketFee(fee, ibctesting.MockFeePort, ibctesting.FirstChannelID, refundAddr.String(), nil)
 
-	require.Equal(t, []sdk.AccAddress{refundAddr}, msg.GetSigners())
-}
-
-func TestMsgPayPacketFeeRoute(t *testing.T) {
-	var msg types.MsgPayPacketFee
-	require.Equal(t, types.RouterKey, msg.Route())
-}
-
-func TestMsgPayPacketFeeGetSignBytes(t *testing.T) {
-	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
-	msg := types.NewMsgPayPacketFee(fee, ibctesting.MockFeePort, ibctesting.FirstChannelID, defaultAccAddress, nil)
-
-	require.NotPanics(t, func() {
-		_ = msg.GetSignBytes()
-	})
+	encodingCfg := moduletestutil.MakeTestEncodingConfig(modulefee.AppModuleBasic{})
+	signers, _, err := encodingCfg.Codec.GetMsgV1Signers(msg)
+	require.NoError(t, err)
+	require.Equal(t, refundAddr.Bytes(), signers[0])
 }
 
 func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
@@ -252,54 +275,69 @@ func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
 		},
 		{
 			"success with empty relayers",
 			func() {
 				msg.PacketFee.Relayers = []string{}
 			},
-			true,
+			nil,
+		},
+		{
+			"should pass with two empty fees",
+			func() {
+				msg.PacketFee.Fee.AckFee = sdk.Coins{}
+				msg.PacketFee.Fee.TimeoutFee = sdk.Coins{}
+			},
+			nil,
+		},
+		{
+			"should pass with one empty fee",
+			func() {
+				msg.PacketFee.Fee.TimeoutFee = sdk.Coins{}
+			},
+			nil,
 		},
 		{
 			"invalid channelID",
 			func() {
 				msg.PacketId.ChannelId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid portID",
 			func() {
 				msg.PacketId.PortId = ""
 			},
-			false,
+			host.ErrInvalidID,
 		},
 		{
 			"invalid sequence",
 			func() {
 				msg.PacketId.Sequence = 0
 			},
-			false,
+			channeltypes.ErrInvalidPacket,
 		},
 		{
 			"relayers is not nil",
 			func() {
 				msg.PacketFee.Relayers = []string{defaultAccAddress}
 			},
-			false,
+			types.ErrRelayersNotEmpty,
 		},
 		{
 			"invalid signer address",
 			func() {
 				msg.PacketFee.RefundAddress = "invalid-addr"
 			},
-			false,
+			errors.New("failed to convert RefundAddress into sdk.AccAddress"),
 		},
 		{
 			"should fail when all fees are invalid",
@@ -308,14 +346,14 @@ func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
 				msg.PacketFee.Fee.RecvFee = invalidFee
 				msg.PacketFee.Fee.TimeoutFee = invalidFee
 			},
-			false,
+			ibcerrors.ErrInvalidCoins,
 		},
 		{
 			"should fail with single invalid fee",
 			func() {
 				msg.PacketFee.Fee.AckFee = invalidFee
 			},
-			false,
+			ibcerrors.ErrInvalidCoins,
 		},
 		{
 			"should fail with two invalid fees",
@@ -323,22 +361,7 @@ func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
 				msg.PacketFee.Fee.AckFee = invalidFee
 				msg.PacketFee.Fee.TimeoutFee = invalidFee
 			},
-			false,
-		},
-		{
-			"should pass with two empty fees",
-			func() {
-				msg.PacketFee.Fee.AckFee = sdk.Coins{}
-				msg.PacketFee.Fee.TimeoutFee = sdk.Coins{}
-			},
-			true,
-		},
-		{
-			"should pass with one empty fee",
-			func() {
-				msg.PacketFee.Fee.TimeoutFee = sdk.Coins{}
-			},
-			true,
+			ibcerrors.ErrInvalidCoins,
 		},
 		{
 			"should fail if all fees are empty",
@@ -347,11 +370,13 @@ func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
 				msg.PacketFee.Fee.RecvFee = sdk.Coins{}
 				msg.PacketFee.Fee.TimeoutFee = sdk.Coins{}
 			},
-			false,
+			ibcerrors.ErrInvalidCoins,
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		packetID := channeltypes.NewPacketID(ibctesting.MockFeePort, ibctesting.FirstChannelID, 1)
 		fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
 		packetFee := types.NewPacketFee(fee, defaultAccAddress, nil)
@@ -362,10 +387,10 @@ func TestMsgPayPacketFeeAsyncValidation(t *testing.T) {
 
 		err := msg.ValidateBasic()
 
-		if tc.expPass {
+		if tc.expErr == nil {
 			require.NoError(t, err, tc.name)
 		} else {
-			require.Error(t, err, tc.name)
+			ibctesting.RequireErrorIsOrContains(t, err, tc.expErr, err.Error())
 		}
 	}
 }
@@ -375,25 +400,10 @@ func TestPayPacketFeeAsyncGetSigners(t *testing.T) {
 	packetID := channeltypes.NewPacketID(ibctesting.MockFeePort, ibctesting.FirstChannelID, 1)
 	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
 	packetFee := types.NewPacketFee(fee, refundAddr.String(), nil)
-
 	msg := types.NewMsgPayPacketFeeAsync(packetID, packetFee)
 
-	require.Equal(t, []sdk.AccAddress{refundAddr}, msg.GetSigners())
-}
-
-func TestMsgPayPacketFeeAsyncRoute(t *testing.T) {
-	var msg types.MsgPayPacketFeeAsync
-	require.Equal(t, types.RouterKey, msg.Route())
-}
-
-func TestMsgPayPacketFeeAsyncGetSignBytes(t *testing.T) {
-	packetID := channeltypes.NewPacketID(ibctesting.MockFeePort, ibctesting.FirstChannelID, 1)
-	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
-	packetFee := types.NewPacketFee(fee, defaultAccAddress, nil)
-
-	msg := types.NewMsgPayPacketFeeAsync(packetID, packetFee)
-
-	require.NotPanics(t, func() {
-		_ = msg.GetSignBytes()
-	})
+	encodingCfg := moduletestutil.MakeTestEncodingConfig(modulefee.AppModuleBasic{})
+	signers, _, err := encodingCfg.Codec.GetMsgV1Signers(msg)
+	require.NoError(t, err)
+	require.Equal(t, refundAddr.Bytes(), signers[0])
 }

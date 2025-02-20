@@ -5,19 +5,13 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	genesistypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/genesis/types"
-	icatypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
+	genesistypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/genesis/types"
+	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
 )
 
 // InitGenesis initializes the interchain accounts host application state from a provided genesis state
 func InitGenesis(ctx sdk.Context, keeper Keeper, state genesistypes.HostGenesisState) {
-	if !keeper.hasCapability(ctx, state.Port) {
-		capability := keeper.BindPort(ctx, state.Port)
-		if err := keeper.ClaimCapability(ctx, capability, host.PortPath(state.Port)); err != nil {
-			panic(fmt.Sprintf("could not claim port capability: %v", err))
-		}
-	}
+	keeper.setPort(ctx, state.Port)
 
 	for _, ch := range state.ActiveChannels {
 		keeper.SetActiveChannelID(ctx, ch.ConnectionId, ch.PortId, ch.ChannelId)
@@ -28,7 +22,7 @@ func InitGenesis(ctx sdk.Context, keeper Keeper, state genesistypes.HostGenesisS
 	}
 
 	if err := state.Params.Validate(); err != nil {
-		panic(fmt.Sprintf("could not set ica host params at genesis: %v", err))
+		panic(fmt.Errorf("could not set ica host params at genesis: %v", err))
 	}
 	keeper.SetParams(ctx, state.Params)
 }

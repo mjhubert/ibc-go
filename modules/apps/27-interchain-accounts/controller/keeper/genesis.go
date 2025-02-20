@@ -1,23 +1,15 @@
 package keeper
 
 import (
-	"fmt"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	genesistypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/genesis/types"
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
+	genesistypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/genesis/types"
 )
 
 // InitGenesis initializes the interchain accounts controller application state from a provided genesis state
 func InitGenesis(ctx sdk.Context, keeper Keeper, state genesistypes.ControllerGenesisState) {
 	for _, portID := range state.Ports {
-		if !keeper.hasCapability(ctx, portID) {
-			capability := keeper.BindPort(ctx, portID)
-			if err := keeper.ClaimCapability(ctx, capability, host.PortPath(portID)); err != nil {
-				panic(fmt.Sprintf("could not claim port capability: %v", err))
-			}
-		}
+		keeper.setPort(ctx, portID)
 	}
 
 	for _, ch := range state.ActiveChannels {

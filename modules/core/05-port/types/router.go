@@ -1,7 +1,9 @@
 package types
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
@@ -23,7 +25,7 @@ func NewRouter() *Router {
 // Seal will panic if called more than once.
 func (rtr *Router) Seal() {
 	if rtr.sealed {
-		panic("router already sealed")
+		panic(errors.New("router already sealed"))
 	}
 	rtr.sealed = true
 }
@@ -37,13 +39,13 @@ func (rtr Router) Sealed() bool {
 // so AddRoute calls can be linked. It will panic if the Router is sealed.
 func (rtr *Router) AddRoute(module string, cbs IBCModule) *Router {
 	if rtr.sealed {
-		panic(fmt.Sprintf("router sealed; cannot register %s route callbacks", module))
+		panic(fmt.Errorf("router sealed; cannot register %s route callbacks", module))
 	}
 	if !sdk.IsAlphaNumeric(module) {
-		panic("route expressions can only contain alphanumeric characters")
+		panic(errors.New("route expressions can only contain alphanumeric characters"))
 	}
 	if rtr.HasRoute(module) {
-		panic(fmt.Sprintf("route %s has already been registered", module))
+		panic(fmt.Errorf("route %s has already been registered", module))
 	}
 
 	rtr.routes[module] = cbs
@@ -56,10 +58,22 @@ func (rtr *Router) HasRoute(module string) bool {
 	return ok
 }
 
-// GetRoute returns a IBCModule for a given module.
-func (rtr *Router) GetRoute(module string) (IBCModule, bool) {
+// Route returns a IBCModule for a given module.
+func (rtr *Router) Route(module string) (IBCModule, bool) {
 	if !rtr.HasRoute(module) {
 		return nil, false
 	}
 	return rtr.routes[module], true
+}
+
+// Keys returns the keys of the routes map.
+func (rtr *Router) Keys() []string {
+	keys := make([]string, 0, len(rtr.routes))
+
+	for k := range rtr.routes {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+	return keys
 }

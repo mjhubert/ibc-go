@@ -17,10 +17,10 @@ const (
 )
 
 func TestGetGithubActionMatrixForTests(t *testing.T) {
-	t.Run("empty dir does not fail", func(t *testing.T) {
+	t.Run("empty dir with no test cases fails", func(t *testing.T) {
 		testingDir := t.TempDir()
 		_, err := getGithubActionMatrixForTests(testingDir, "", "", nil)
-		assert.NoError(t, err)
+		assert.Error(t, err)
 	})
 
 	t.Run("only test functions are picked up", func(t *testing.T) {
@@ -105,12 +105,12 @@ func TestGetGithubActionMatrixForTests(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("non test files are not picked up", func(t *testing.T) {
+	t.Run("non test files are skipped", func(t *testing.T) {
 		testingDir := t.TempDir()
 		createFileWithTestSuiteAndTests(t, "FeeMiddlewareTestSuite", "TestA", "TestB", testingDir, nonTestFile)
 
 		gh, err := getGithubActionMatrixForTests(testingDir, "", "", nil)
-		assert.NoError(t, err)
+		assert.Error(t, err)
 		assert.Empty(t, gh.Include)
 	})
 
@@ -139,6 +139,7 @@ type FeeMiddlewareTestSuite struct {}
 }
 
 func assertGithubActionTestMatricesEqual(t *testing.T, expected, actual GithubActionTestMatrix) {
+	t.Helper()
 	// sort by both suite and test as the order of the end result does not matter as
 	// all tests will be run.
 	sort.SliceStable(expected.Include, func(i, j int) bool {
@@ -183,6 +184,7 @@ func helper() {}
 }
 
 func createFileWithTestSuiteAndTests(t *testing.T, suiteName, fn1Name, fn2Name, dir, filename string) {
+	t.Helper()
 	goFileContents := goTestFileContents(suiteName, fn1Name, fn2Name)
 	err := os.WriteFile(path.Join(dir, filename), []byte(goFileContents), os.FileMode(0o777))
 	assert.NoError(t, err)

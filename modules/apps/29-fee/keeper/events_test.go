@@ -1,15 +1,16 @@
 package keeper_test
 
 import (
-	abcitypes "github.com/cometbft/cometbft/abci/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	abcitypes "github.com/cometbft/cometbft/abci/types"
+
+	"github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
+	transfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 func (suite *KeeperTestSuite) TestIncentivizePacketEvent() {
@@ -19,7 +20,7 @@ func (suite *KeeperTestSuite) TestIncentivizePacketEvent() {
 		expTimeoutFees sdk.Coins
 	)
 
-	suite.coordinator.Setup(suite.path)
+	suite.path.Setup()
 
 	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
 	msg := types.NewMsgPayPacketFee(
@@ -90,13 +91,13 @@ func (suite *KeeperTestSuite) TestIncentivizePacketEvent() {
 func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 	// create an incentivized transfer path
 	path := ibctesting.NewPath(suite.chainA, suite.chainB)
-	feeTransferVersion := string(types.ModuleCdc.MustMarshalJSON(&types.Metadata{FeeVersion: types.Version, AppVersion: transfertypes.Version}))
+	feeTransferVersion := string(types.ModuleCdc.MustMarshalJSON(&types.Metadata{FeeVersion: types.Version, AppVersion: transfertypes.V1}))
 	path.EndpointA.ChannelConfig.Version = feeTransferVersion
 	path.EndpointB.ChannelConfig.Version = feeTransferVersion
 	path.EndpointA.ChannelConfig.PortID = transfertypes.PortID
 	path.EndpointB.ChannelConfig.PortID = transfertypes.PortID
 
-	suite.coordinator.Setup(path)
+	path.Setup()
 
 	// send a new MsgPayPacketFee and MsgTransfer to chainA
 	fee := types.NewFee(defaultRecvFee, defaultAckFee, defaultTimeoutFee)
@@ -110,7 +111,7 @@ func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 
 	msgTransfer := transfertypes.NewMsgTransfer(
 		path.EndpointA.ChannelConfig.PortID, path.EndpointA.ChannelID,
-		sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(100)), suite.chainA.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(),
+		ibctesting.TestCoin, suite.chainA.SenderAccount.GetAddress().String(), suite.chainB.SenderAccount.GetAddress().String(),
 		clienttypes.NewHeight(1, 100), 0, "",
 	)
 
@@ -119,7 +120,7 @@ func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 	suite.Require().NotNil(res)
 
 	// parse the packet from result events and recv packet on chainB
-	packet, err := ibctesting.ParsePacketFromEvents(res.GetEvents())
+	packet, err := ibctesting.ParsePacketFromEvents(res.Events)
 	suite.Require().NoError(err)
 	suite.Require().NotNil(packet)
 
@@ -131,7 +132,7 @@ func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 	suite.Require().NotNil(res)
 
 	// parse the acknowledgement from result events and acknowledge packet on chainA
-	ack, err := ibctesting.ParseAckFromEvents(res.GetEvents())
+	ack, err := ibctesting.ParseAckFromEvents(res.Events)
 	suite.Require().NoError(err)
 	suite.Require().NotNil(ack)
 
@@ -143,7 +144,7 @@ func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 	suite.Require().NoError(err)
 	suite.Require().NotNil(res)
 
-	events := res.GetEvents()
+	events := res.Events
 	expectedEvents := sdk.Events{
 		sdk.NewEvent(
 			types.EventTypeDistributeFee,
@@ -158,11 +159,11 @@ func (suite *KeeperTestSuite) TestDistributeFeeEvent() {
 		sdk.NewEvent(
 			types.EventTypeDistributeFee,
 			sdk.NewAttribute(types.AttributeKeyReceiver, suite.chainA.SenderAccount.GetAddress().String()),
-			sdk.NewAttribute(types.AttributeKeyFee, defaultTimeoutFee.String()),
+			sdk.NewAttribute(types.AttributeKeyFee, sdk.NewCoins().String()),
 		),
-	}
+	}.ToABCIEvents()
 
-	for _, evt := range expectedEvents {
-		suite.Require().Contains(events, evt)
-	}
+	var indexSet map[string]struct{}
+	expectedEvents = sdk.MarkEventsToIndex(expectedEvents, indexSet)
+	ibctesting.AssertEvents(&suite.Suite, expectedEvents, events)
 }

@@ -1,10 +1,10 @@
 package types_test
 
 import (
-	fmt "fmt"
+	"fmt"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 func (suite *TypesTestSuite) TestKeyActiveChannel() {

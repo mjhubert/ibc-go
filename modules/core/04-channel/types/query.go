@@ -3,8 +3,8 @@ package types
 import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 var (
@@ -30,7 +30,7 @@ func NewQueryChannelClientStateResponse(identifiedClientState clienttypes.Identi
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (qccsr QueryChannelClientStateResponse) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return qccsr.IdentifiedClientState.UnpackInterfaces(unpacker)
 }
@@ -45,7 +45,7 @@ func NewQueryChannelConsensusStateResponse(clientID string, anyConsensusState *c
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (qccsr QueryChannelConsensusStateResponse) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return unpacker.UnpackAny(qccsr.ConsensusState, new(exported.ConsensusState))
 }
@@ -102,5 +102,23 @@ func NewQueryNextSequenceSendResponse(
 		NextSequenceSend: sequence,
 		Proof:            proof,
 		ProofHeight:      height,
+	}
+}
+
+// NewQueryUpgradeErrorResponse creates a new QueryUpgradeErrorResponse instance
+func NewQueryUpgradeErrorResponse(errorReceipt ErrorReceipt, proof []byte, height clienttypes.Height) *QueryUpgradeErrorResponse {
+	return &QueryUpgradeErrorResponse{
+		ErrorReceipt: errorReceipt,
+		Proof:        proof,
+		ProofHeight:  height,
+	}
+}
+
+// NewQueryUpgradeResponse creates a new QueryUpgradeResponse instance
+func NewQueryUpgradeResponse(upgrade Upgrade, proof []byte, height clienttypes.Height) *QueryUpgradeResponse {
+	return &QueryUpgradeResponse{
+		Upgrade:     upgrade,
+		Proof:       proof,
+		ProofHeight: height,
 	}
 }

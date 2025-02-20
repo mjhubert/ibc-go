@@ -4,15 +4,22 @@ import (
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	capabilitytypes "github.com/cosmos/ibc-go/modules/capability/types"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/host/keeper"
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/host/types"
-	icatypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	ibcerrors "github.com/cosmos/ibc-go/v7/modules/core/errors"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/types"
+	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	porttypes "github.com/cosmos/ibc-go/v10/modules/core/05-port/types"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
+)
+
+var (
+	_ porttypes.IBCModule             = (*IBCModule)(nil)
+	_ porttypes.PacketDataUnmarshaler = (*IBCModule)(nil)
+	_ porttypes.UpgradableModule      = (*IBCModule)(nil)
 )
 
 // IBCModule implements the ICS26 interface for interchain accounts host chains
@@ -28,15 +35,14 @@ func NewIBCModule(k keeper.Keeper) IBCModule {
 }
 
 // OnChanOpenInit implements the IBCModule interface
-func (im IBCModule) OnChanOpenInit(
-	ctx sdk.Context,
-	order channeltypes.Order,
-	connectionHops []string,
-	portID string,
-	channelID string,
-	chanCap *capabilitytypes.Capability,
-	counterparty channeltypes.Counterparty,
-	version string,
+func (IBCModule) OnChanOpenInit(
+	_ sdk.Context,
+	_ channeltypes.Order,
+	_ []string,
+	_ string,
+	_ string,
+	_ channeltypes.Counterparty,
+	_ string,
 ) (string, error) {
 	return "", errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "channel handshake must be initiated by controller chain")
 }
@@ -48,7 +54,6 @@ func (im IBCModule) OnChanOpenTry(
 	connectionHops []string,
 	portID,
 	channelID string,
-	chanCap *capabilitytypes.Capability,
 	counterparty channeltypes.Counterparty,
 	counterpartyVersion string,
 ) (string, error) {
@@ -56,21 +61,21 @@ func (im IBCModule) OnChanOpenTry(
 		return "", types.ErrHostSubModuleDisabled
 	}
 
-	return im.keeper.OnChanOpenTry(ctx, order, connectionHops, portID, channelID, chanCap, counterparty, counterpartyVersion)
+	return im.keeper.OnChanOpenTry(ctx, order, connectionHops, portID, channelID, counterparty, counterpartyVersion)
 }
 
 // OnChanOpenAck implements the IBCModule interface
-func (im IBCModule) OnChanOpenAck(
-	ctx sdk.Context,
-	portID,
-	channelID string,
-	counterpartyChannelID string,
-	counterpartyVersion string,
+func (IBCModule) OnChanOpenAck(
+	_ sdk.Context,
+	_,
+	_ string,
+	_ string,
+	_ string,
 ) error {
 	return errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "channel handshake must be initiated by controller chain")
 }
 
-// OnChanOpenAck implements the IBCModule interface
+// OnChanOpenConfirm implements the IBCModule interface
 func (im IBCModule) OnChanOpenConfirm(
 	ctx sdk.Context,
 	portID,
@@ -84,10 +89,10 @@ func (im IBCModule) OnChanOpenConfirm(
 }
 
 // OnChanCloseInit implements the IBCModule interface
-func (im IBCModule) OnChanCloseInit(
-	ctx sdk.Context,
-	portID,
-	channelID string,
+func (IBCModule) OnChanCloseInit(
+	_ sdk.Context,
+	_ string,
+	_ string,
 ) error {
 	// Disallow user-initiated channel closing for interchain account channels
 	return errorsmod.Wrap(ibcerrors.ErrInvalidRequest, "user cannot close channel")
@@ -105,12 +110,13 @@ func (im IBCModule) OnChanCloseConfirm(
 // OnRecvPacket implements the IBCModule interface
 func (im IBCModule) OnRecvPacket(
 	ctx sdk.Context,
+	_ string,
 	packet channeltypes.Packet,
 	_ sdk.AccAddress,
 ) ibcexported.Acknowledgement {
-	logger := im.keeper.Logger(ctx)
 	if !im.keeper.GetParams(ctx).HostEnabled {
-		logger.Info("host submodule is disabled")
+		im.keeper.Logger(ctx).Info("host submodule is disabled")
+		keeper.EmitHostDisabledEvent(ctx, packet)
 		return channeltypes.NewErrorAcknowledgement(types.ErrHostSubModuleDisabled)
 	}
 
@@ -118,9 +124,9 @@ func (im IBCModule) OnRecvPacket(
 	ack := channeltypes.NewResultAcknowledgement(txResponse)
 	if err != nil {
 		ack = channeltypes.NewErrorAcknowledgement(err)
-		logger.Error(fmt.Sprintf("%s sequence %d", err.Error(), packet.Sequence))
+		im.keeper.Logger(ctx).Error(fmt.Sprintf("%s sequence %d", err.Error(), packet.Sequence))
 	} else {
-		logger.Info("successfully handled packet sequence: %d", packet.Sequence)
+		im.keeper.Logger(ctx).Info("successfully handled packet", "sequence", packet.Sequence)
 	}
 
 	// Emit an event indicating a successful or failed acknowledgement.
@@ -131,20 +137,63 @@ func (im IBCModule) OnRecvPacket(
 }
 
 // OnAcknowledgementPacket implements the IBCModule interface
-func (im IBCModule) OnAcknowledgementPacket(
-	ctx sdk.Context,
-	packet channeltypes.Packet,
-	acknowledgement []byte,
-	relayer sdk.AccAddress,
+func (IBCModule) OnAcknowledgementPacket(
+	_ sdk.Context,
+	_ string,
+	_ channeltypes.Packet,
+	_ []byte,
+	_ sdk.AccAddress,
 ) error {
 	return errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "cannot receive acknowledgement on a host channel end, a host chain does not send a packet over the channel")
 }
 
 // OnTimeoutPacket implements the IBCModule interface
-func (im IBCModule) OnTimeoutPacket(
-	ctx sdk.Context,
-	packet channeltypes.Packet,
-	relayer sdk.AccAddress,
+func (IBCModule) OnTimeoutPacket(
+	_ sdk.Context,
+	_ string,
+	_ channeltypes.Packet,
+	_ sdk.AccAddress,
 ) error {
 	return errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "cannot cause a packet timeout on a host channel end, a host chain does not send a packet over the channel")
+}
+
+// OnChanUpgradeInit implements the IBCModule interface
+func (IBCModule) OnChanUpgradeInit(_ sdk.Context, _, _ string, _ channeltypes.Order, _ []string, _ string) (string, error) {
+	return "", errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "channel upgrade handshake must be initiated by controller chain")
+}
+
+// OnChanUpgradeTry implements the IBCModule interface
+func (im IBCModule) OnChanUpgradeTry(ctx sdk.Context, portID, channelID string, proposedOrder channeltypes.Order, proposedConnectionHops []string, counterpartyVersion string) (string, error) {
+	if !im.keeper.GetParams(ctx).HostEnabled {
+		return "", types.ErrHostSubModuleDisabled
+	}
+
+	return im.keeper.OnChanUpgradeTry(ctx, portID, channelID, proposedOrder, proposedConnectionHops, counterpartyVersion)
+}
+
+// OnChanUpgradeAck implements the IBCModule interface
+func (IBCModule) OnChanUpgradeAck(_ sdk.Context, _, _, _ string) error {
+	return errorsmod.Wrap(icatypes.ErrInvalidChannelFlow, "channel upgrade handshake must be initiated by controller chain")
+}
+
+// OnChanUpgradeOpen implements the IBCModule interface
+func (IBCModule) OnChanUpgradeOpen(_ sdk.Context, _, _ string, _ channeltypes.Order, _ []string, _ string) {
+}
+
+// UnmarshalPacketData attempts to unmarshal the provided packet data bytes
+// into an InterchainAccountPacketData. This function implements the optional
+// PacketDataUnmarshaler interface required for ADR 008 support.
+func (im IBCModule) UnmarshalPacketData(ctx sdk.Context, portID string, channelID string, bz []byte) (interface{}, string, error) {
+	var data icatypes.InterchainAccountPacketData
+	err := data.UnmarshalJSON(bz)
+	if err != nil {
+		return nil, "", err
+	}
+
+	version, ok := im.keeper.GetAppVersion(ctx, portID, channelID)
+	if !ok {
+		return nil, "", errorsmod.Wrapf(ibcerrors.ErrNotFound, "app version not found for port %s and channel %s", portID, channelID)
+	}
+
+	return data, version, nil
 }

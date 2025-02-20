@@ -4,10 +4,14 @@ import (
 	"context"
 
 	errorsmod "cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	ibcerrors "github.com/cosmos/ibc-go/v7/modules/core/errors"
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer/internal/events"
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer/internal/telemetry"
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
 )
 
 var _ types.MsgServer = (*Keeper)(nil)
@@ -25,45 +29,62 @@ func (k Keeper) Transfer(goCtx context.Context, msg *types.MsgTransfer) (*types.
 		return nil, err
 	}
 
-	if !k.bankKeeper.IsSendEnabledCoin(ctx, msg.Token) {
-		return nil, errorsmod.Wrapf(types.ErrSendDisabled, "%s transfers are currently disabled", msg.Token.Denom)
+	channel, found := k.channelKeeper.GetChannel(ctx, msg.SourcePort, msg.SourceChannel)
+	if !found {
+		return nil, errorsmod.Wrapf(channeltypes.ErrChannelNotFound, "port ID (%s) channel ID (%s)", msg.SourcePort, msg.SourceChannel)
 	}
 
-	if k.bankKeeper.BlockedAddr(sender) {
-		return nil, errorsmod.Wrapf(ibcerrors.ErrUnauthorized, "%s is not allowed to send funds", sender)
+	appVersion, found := k.ics4Wrapper.GetAppVersion(ctx, msg.SourcePort, msg.SourceChannel)
+	if !found {
+		return nil, errorsmod.Wrapf(ibcerrors.ErrInvalidRequest, "application version not found for source port: %s and source channel: %s", msg.SourcePort, msg.SourceChannel)
 	}
 
-	sequence, err := k.sendTransfer(
-		ctx, msg.SourcePort, msg.SourceChannel, msg.Token, sender, msg.Receiver, msg.TimeoutHeight, msg.TimeoutTimestamp,
-		msg.Memo)
+	coin := msg.Token
+
+	// Using types.UnboundedSpendLimit allows us to send the entire balance of a given denom.
+	if coin.Amount.Equal(types.UnboundedSpendLimit()) {
+		coin.Amount = k.BankKeeper.SpendableCoin(ctx, sender, coin.Denom).Amount
+		if coin.Amount.IsZero() {
+			return nil, errorsmod.Wrapf(types.ErrInvalidAmount, "empty spendable balance for %s", coin.Denom)
+		}
+	}
+
+	token, err := k.TokenFromCoin(ctx, coin)
 	if err != nil {
 		return nil, err
 	}
 
-	k.Logger(ctx).Info("IBC fungible token transfer", "token", msg.Token.Denom, "amount", msg.Token.Amount.String(), "sender", msg.Sender, "receiver", msg.Receiver)
+	if err := k.SendTransfer(ctx, msg.SourcePort, msg.SourceChannel, token, sender); err != nil {
+		return nil, err
+	}
 
-	ctx.EventManager().EmitEvents(sdk.Events{
-		sdk.NewEvent(
-			types.EventTypeTransfer,
-			sdk.NewAttribute(sdk.AttributeKeySender, msg.Sender),
-			sdk.NewAttribute(types.AttributeKeyReceiver, msg.Receiver),
-			sdk.NewAttribute(types.AttributeKeyAmount, msg.Token.Amount.String()),
-			sdk.NewAttribute(types.AttributeKeyDenom, msg.Token.Denom),
-			sdk.NewAttribute(types.AttributeKeyMemo, msg.Memo),
-		),
-		sdk.NewEvent(
-			sdk.EventTypeMessage,
-			sdk.NewAttribute(sdk.AttributeKeyModule, types.ModuleName),
-		),
-	})
+	packetDataBytes, err := createPacketDataBytesFromVersion(
+		appVersion, sender.String(), msg.Receiver, msg.Memo, token,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	sequence, err := k.ics4Wrapper.SendPacket(ctx, msg.SourcePort, msg.SourceChannel, msg.TimeoutHeight, msg.TimeoutTimestamp, packetDataBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	events.EmitTransferEvent(ctx, sender.String(), msg.Receiver, token, msg.Memo)
+
+	destinationPort := channel.Counterparty.PortId
+	destinationChannel := channel.Counterparty.ChannelId
+	telemetry.ReportTransfer(msg.SourcePort, msg.SourceChannel, destinationPort, destinationChannel, token)
+
+	k.Logger(ctx).Info("IBC fungible token transfer", "token", coin, "sender", msg.Sender, "receiver", msg.Receiver)
 
 	return &types.MsgTransferResponse{Sequence: sequence}, nil
 }
 
 // UpdateParams defines an rpc handler method for MsgUpdateParams. Updates the ibc-transfer module's parameters.
 func (k Keeper) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {
-	if k.authority != msg.Authority {
-		return nil, errorsmod.Wrapf(ibcerrors.ErrUnauthorized, "expected %s, got %s", k.authority, msg.Authority)
+	if k.GetAuthority() != msg.Signer {
+		return nil, errorsmod.Wrapf(ibcerrors.ErrUnauthorized, "expected %s, got %s", k.GetAuthority(), msg.Signer)
 	}
 
 	ctx := sdk.UnwrapSDKContext(goCtx)

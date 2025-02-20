@@ -1,13 +1,14 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 var (
@@ -107,7 +108,7 @@ func (gs GenesisState) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 // failure.
 func (gs GenesisState) Validate() error {
 	// keep track of the max sequence to ensure it is less than
-	// the next sequence used in creating client identifers.
+	// the next sequence used in creating client identifiers.
 	var maxSequence uint64
 
 	if err := gs.Params.Validate(); err != nil {
@@ -115,7 +116,6 @@ func (gs GenesisState) Validate() error {
 	}
 
 	validClients := make(map[string]string)
-
 	for i, client := range gs.Clients {
 		if err := host.ClientIdentifierValidator(client.ClientId); err != nil {
 			return fmt.Errorf("invalid client consensus state identifier %s index %d: %w", client.ClientId, i, err)
@@ -163,7 +163,7 @@ func (gs GenesisState) Validate() error {
 
 		for i, consensusState := range cc.ConsensusStates {
 			if consensusState.Height.IsZero() {
-				return fmt.Errorf("consensus state height cannot be zero")
+				return errors.New("consensus state height cannot be zero")
 			}
 
 			cs, ok := consensusState.ConsensusState.GetCachedValue().(exported.ConsensusState)
@@ -226,10 +226,10 @@ func (gm GenesisMetadata) GetValue() []byte {
 // Validate ensures key and value of metadata are not empty
 func (gm GenesisMetadata) Validate() error {
 	if len(gm.Key) == 0 {
-		return fmt.Errorf("genesis metadata key cannot be empty")
+		return errors.New("genesis metadata key cannot be empty")
 	}
 	if len(gm.Value) == 0 {
-		return fmt.Errorf("genesis metadata value cannot be empty")
+		return errors.New("genesis metadata value cannot be empty")
 	}
 	return nil
 }
