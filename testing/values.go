@@ -7,20 +7,26 @@ package ibctesting
 import (
 	"time"
 
+	sdkmath "cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	ibctransfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	connectiontypes "github.com/cosmos/ibc-go/v7/modules/core/03-connection/types"
-	commitmenttypes "github.com/cosmos/ibc-go/v7/modules/core/23-commitment/types"
-	ibctm "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
-	"github.com/cosmos/ibc-go/v7/testing/mock"
-	"github.com/cosmos/ibc-go/v7/testing/simapp"
+	"github.com/cometbft/cometbft/crypto/tmhash"
+
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	connectiontypes "github.com/cosmos/ibc-go/v10/modules/core/03-connection/types"
+	commitmenttypes "github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types"
+	ibctm "github.com/cosmos/ibc-go/v10/modules/light-clients/07-tendermint"
+	"github.com/cosmos/ibc-go/v10/testing/mock"
 )
 
 const (
-	FirstClientID     = "07-tendermint-0"
-	FirstChannelID    = "channel-0"
-	FirstConnectionID = "connection-0"
+	FirstClientID      = "07-tendermint-0"
+	SecondClientID     = "07-tendermint-1"
+	FirstChannelID     = "channel-0"
+	SecondChannelID    = "channel-1"
+	FirstConnectionID  = "connection-0"
+	SecondConnectionID = "connection-1"
 
 	// Default params constants used to create a TM client
 	TrustingPeriod     time.Duration = time.Hour * 24 * 7 * 2
@@ -34,13 +40,13 @@ const (
 	// Application Ports
 	TransferPort = ibctransfertypes.ModuleName
 	MockPort     = mock.ModuleName
-	MockFeePort  = simapp.MockFeePort
 
 	// used for testing proposals
 	Title       = "title"
 	Description = "description"
 
-	LongString = "LoremipsumdolorsitameconsecteturadipiscingeliseddoeiusmodtemporincididuntutlaboreetdoloremagnaaliquUtenimadminimveniamquisnostrudexercitationullamcolaborisnisiutaliquipexeacommodoconsequDuisauteiruredolorinreprehenderitinvoluptateelitsseillumoloreufugiatnullaariaturEcepteurintoccaectupidatatonroidentuntnulpauifficiaeseruntmollitanimidestlaborum"
+	// character set used for generating a random string in GenerateString
+	charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
 var (
@@ -49,18 +55,25 @@ var (
 	// DefaultTrustLevel sets params variables used to create a TM client
 	DefaultTrustLevel = ibctm.DefaultTrustLevel
 
-	TestAccAddress = "cosmos17dtl0mjt3t77kpuhg2edqzjpszulwhgzuj9ljs"
-	TestCoin       = sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(100))
-	TestCoins      = sdk.NewCoins(TestCoin)
+	DefaultTimeoutTimestampDelta = uint64(time.Hour.Nanoseconds())
+	DefaultCoinAmount            = sdkmath.NewInt(100)
+
+	TestAccAddress    = "cosmos17dtl0mjt3t77kpuhg2edqzjpszulwhgzuj9ljs"
+	TestCoin          = sdk.NewCoin(sdk.DefaultBondDenom, DefaultCoinAmount)
+	SecondaryDenom    = "ufoo"
+	SecondaryTestCoin = sdk.NewCoin(SecondaryDenom, DefaultCoinAmount)
+	TestCoins         = sdk.NewCoins(TestCoin, SecondaryTestCoin)
 
 	UpgradePath = []string{"upgrade", "upgradedIBCState"}
 
-	ConnectionVersion = connectiontypes.ExportedVersionsToProto(connectiontypes.GetCompatibleVersions())[0]
+	ConnectionVersion = connectiontypes.GetCompatibleVersions()[0]
 
-	MockAcknowledgement          = mock.MockAcknowledgement.Acknowledgement()
-	MockPacketData               = mock.MockPacketData
-	MockFailPacketData           = mock.MockFailPacketData
-	MockRecvCanaryCapabilityName = mock.MockRecvCanaryCapabilityName
+	MockAcknowledgement = mock.MockAcknowledgement.Acknowledgement()
+	MockPacketData      = mock.MockPacketData
+	MockFailPacketData  = mock.MockFailPacketData
 
 	prefix = commitmenttypes.NewMerklePrefix([]byte("ibc"))
+	// unusedHash is a placeholder hash used for testing.
+	unusedHash = tmhash.Sum([]byte{0x00})
+	MerklePath = commitmenttypes.NewMerklePath([]byte("ibc"), []byte(""))
 )

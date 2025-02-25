@@ -4,14 +4,16 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/version"
-	"github.com/spf13/cobra"
 
-	"github.com/cosmos/ibc-go/v7/modules/core/02-client/client/utils"
-	"github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
+	"github.com/cosmos/ibc-go/v10/modules/core/02-client/client/utils"
+	"github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	clienttypesv2 "github.com/cosmos/ibc-go/v10/modules/core/02-client/v2/types"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 const (
@@ -19,7 +21,7 @@ const (
 )
 
 // GetCmdQueryClientStates defines the command to query all the light clients
-// that this chain mantains.
+// that this chain maintains.
 func GetCmdQueryClientStates() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "states",
@@ -53,6 +55,38 @@ func GetCmdQueryClientStates() *cobra.Command {
 	}
 	flags.AddQueryFlagsToCmd(cmd)
 	flags.AddPaginationFlagsToCmd(cmd, "client states")
+
+	return cmd
+}
+
+func GetCmdQueryCounterpartyInfo() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "counterparty-info [client-id]",
+		Short:   "Query a client's counterparty info",
+		Long:    "Query a client's counterparty info",
+		Example: fmt.Sprintf("%s query %s %s counterparty-info [client-id]", version.AppName, ibcexported.ModuleName, types.SubModuleName),
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return err
+			}
+			clientID := args[0]
+
+			queryClient := clienttypesv2.NewQueryClient(clientCtx)
+			req := &clienttypesv2.QueryCounterpartyInfoRequest{
+				ClientId: clientID,
+			}
+			counterpartyRes, err := queryClient.CounterpartyInfo(cmd.Context(), req)
+			if err != nil {
+				return err
+			}
+
+			return clientCtx.PrintProto(counterpartyRes)
+		},
+	}
+
+	flags.AddQueryFlagsToCmd(cmd)
 
 	return cmd
 }

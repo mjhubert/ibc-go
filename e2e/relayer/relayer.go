@@ -1,13 +1,17 @@
 package relayer
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	dockerclient "github.com/docker/docker/client"
-	"github.com/strangelove-ventures/interchaintest/v7"
-	"github.com/strangelove-ventures/interchaintest/v7/ibc"
-	"github.com/strangelove-ventures/interchaintest/v7/relayer"
+	"github.com/pelletier/go-toml"
+	"github.com/strangelove-ventures/interchaintest/v8"
+	"github.com/strangelove-ventures/interchaintest/v8/ibc"
+	"github.com/strangelove-ventures/interchaintest/v8/relayer"
+	"github.com/strangelove-ventures/interchaintest/v8/relayer/hermes"
 	"go.uber.org/zap"
 )
 
@@ -15,36 +19,125 @@ const (
 	Rly    = "rly"
 	Hermes = "hermes"
 
-	cosmosRelayerRepository = "damiannolan/rly" //"ghcr.io/cosmos/relayer"
-	cosmosRelayerUser       = "100:1000"        // docker run -it --rm --entrypoint echo ghcr.io/cosmos/relayer "$(id -u):$(id -g)"
+	HermesRelayerRepository = "ghcr.io/informalsystems/hermes"
+	hermesRelayerUser       = "2000:2000"
+	RlyRelayerRepository    = "ghcr.io/cosmos/relayer"
+	rlyRelayerUser          = "100:1000"
+
+	// relativeHermesConfigFilePath is the path to the hermes config file relative to the home directory within the container.
+	relativeHermesConfigFilePath = ".hermes/config.toml"
 )
 
 // Config holds configuration values for the relayer used in the tests.
 type Config struct {
 	// Tag is the tag used for the relayer image.
 	Tag string `yaml:"tag"`
-	// Type specifies the type of relayer that this is.
-	Type string `yaml:"type"`
+	// ID specifies the type of relayer that this is.
+	ID string `yaml:"id"`
 	// Image is the image that should be used for the relayer.
 	Image string `yaml:"image"`
 }
 
 // New returns an implementation of ibc.Relayer depending on the provided RelayerType.
 func New(t *testing.T, cfg Config, logger *zap.Logger, dockerClient *dockerclient.Client, network string) ibc.Relayer {
-	switch cfg.Type {
+	t.Helper()
+	switch cfg.ID {
 	case Rly:
-		return newCosmosRelayer(t, cfg.Tag, logger, dockerClient, network)
+		return newCosmosRelayer(t, cfg.Tag, logger, dockerClient, network, cfg.Image)
 	case Hermes:
-		return newHermesRelayer()
+		return newHermesRelayer(t, cfg.Tag, logger, dockerClient, network, cfg.Image)
 	default:
-		panic(fmt.Sprintf("unknown relayer specified: %s", cfg.Type))
+		panic(fmt.Errorf("unknown relayer specified: %s", cfg.ID))
 	}
+}
+
+// ApplyPacketFilter applies a packet filter to the hermes config file, which specifies a complete set of channels
+// to watch for packets.
+func ApplyPacketFilter(ctx context.Context, t *testing.T, r ibc.Relayer, chainID string, channels []ibc.ChannelOutput) error {
+	t.Helper()
+
+	h, ok := r.(*hermes.Relayer)
+	if !ok {
+		t.Logf("relayer %T does not support packet filtering, or it has not been implemented yet.", r)
+		return nil
+	}
+
+	return modifyHermesConfigFile(ctx, h, func(config map[string]interface{}) error {
+		chains, ok := config["chains"].([]map[string]interface{})
+		if !ok {
+			return errors.New("failed to get chains from hermes config")
+		}
+		var chain map[string]interface{}
+		for _, c := range chains {
+			if c["id"] == chainID {
+				chain = c
+				break
+			}
+		}
+
+		if chain == nil {
+			return fmt.Errorf("failed to find chain with id %s", chainID)
+		}
+
+		var channelEndpoints [][]string
+		for _, c := range channels {
+			channelEndpoints = append(channelEndpoints, []string{c.PortID, c.ChannelID})
+		}
+
+		// [chains.packet_filter]
+		//	# policy = 'allow'
+		//	# list = [
+		//	#   ['ica*', '*'],
+		//	#   ['transfer', 'channel-0'],
+		//	# ]
+
+		// TODO(chatton): explicitly enable watching of ICA channels
+		// this will ensure the ICA tests pass, but this will need to be modified to make sure
+		// ICA tests will succeed in parallel.
+		channelEndpoints = append(channelEndpoints, []string{"ica*", "*"})
+
+		// we explicitly override the full list, this allows this function to provide a complete set of channels to watch.
+		chain["packet_filter"] = map[string]interface{}{
+			"policy": "allow",
+			"list":   channelEndpoints,
+		}
+
+		return nil
+	})
+}
+
+// modifyHermesConfigFile reads the hermes config file, applies a modification function and returns an error if any.
+func modifyHermesConfigFile(ctx context.Context, h *hermes.Relayer, modificationFn func(map[string]interface{}) error) error {
+	bz, err := h.ReadFileFromHomeDir(ctx, relativeHermesConfigFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read hermes config file: %w", err)
+	}
+
+	var config map[string]interface{}
+	if err := toml.Unmarshal(bz, &config); err != nil {
+		return errors.New("failed to unmarshal hermes config bytes")
+	}
+
+	if modificationFn != nil {
+		if err := modificationFn(config); err != nil {
+			return fmt.Errorf("failed to modify hermes config: %w", err)
+		}
+	}
+
+	bz, err = toml.Marshal(config)
+	if err != nil {
+		return errors.New("failed to marshal hermes config bytes")
+	}
+
+	return h.WriteFileToHomeDir(ctx, relativeHermesConfigFilePath, bz)
 }
 
 // newCosmosRelayer returns an instance of the go relayer.
 // Options are used to allow for relayer version selection and specifying the default processing option.
-func newCosmosRelayer(t *testing.T, tag string, logger *zap.Logger, dockerClient *dockerclient.Client, network string) ibc.Relayer {
-	customImageOption := relayer.CustomDockerImage(cosmosRelayerRepository, tag, cosmosRelayerUser)
+func newCosmosRelayer(t *testing.T, tag string, logger *zap.Logger, dockerClient *dockerclient.Client, network, relayerImage string) ibc.Relayer {
+	t.Helper()
+
+	customImageOption := relayer.CustomDockerImage(relayerImage, tag, rlyRelayerUser)
 	relayerProcessingOption := relayer.StartupFlags("-p", "events") // relayer processes via events
 
 	relayerFactory := interchaintest.NewBuiltinRelayerFactory(ibc.CosmosRly, logger, customImageOption, relayerProcessingOption)
@@ -55,23 +148,30 @@ func newCosmosRelayer(t *testing.T, tag string, logger *zap.Logger, dockerClient
 }
 
 // newHermesRelayer returns an instance of the hermes relayer.
-func newHermesRelayer() ibc.Relayer {
-	panic("hermes relayer not yet implemented for interchaintest")
+func newHermesRelayer(t *testing.T, tag string, logger *zap.Logger, dockerClient *dockerclient.Client, network, relayerImage string) ibc.Relayer {
+	t.Helper()
+
+	customImageOption := relayer.CustomDockerImage(relayerImage, tag, hermesRelayerUser)
+	relayerFactory := interchaintest.NewBuiltinRelayerFactory(ibc.Hermes, logger, customImageOption)
+
+	return relayerFactory.Build(
+		t, dockerClient, network,
+	)
 }
 
-// RelayerMap is a mapping from test names to a relayer set for that test.
-type RelayerMap map[string]map[ibc.Wallet]bool
+// Map is a mapping from test names to a relayer set for that test.
+type Map map[string]map[ibc.Wallet]bool
 
 // AddRelayer adds the given relayer to the relayer set for the given test name.
-func (r RelayerMap) AddRelayer(testName string, relayer ibc.Wallet) {
+func (r Map) AddRelayer(testName string, ibcrelayer ibc.Wallet) {
 	if _, ok := r[testName]; !ok {
 		r[testName] = make(map[ibc.Wallet]bool)
 	}
-	r[testName][relayer] = true
+	r[testName][ibcrelayer] = true
 }
 
-// containsRelayer returns true if the given relayer is in the relayer set for the given test name.
-func (r RelayerMap) ContainsRelayer(testName string, wallet ibc.Wallet) bool {
+// ContainsRelayer returns true if the given relayer is in the relayer set for the given test name.
+func (r Map) ContainsRelayer(testName string, wallet ibc.Wallet) bool {
 	if relayerSet, ok := r[testName]; ok {
 		return relayerSet[wallet]
 	}

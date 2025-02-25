@@ -4,48 +4,48 @@ import (
 	"fmt"
 	"testing"
 
-	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cosmos/ibc-go/v7/modules/core/23-commitment/types"
+	storetypes "cosmossdk.io/store/types"
+
+	"github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/23-commitment/types/v2"
 )
 
 func (suite *MerkleTestSuite) TestVerifyMembership() {
 	suite.iavlStore.Set([]byte("MYKEY"), []byte("MYVALUE"))
 	cid := suite.store.Commit()
 
-	res := suite.store.Query(abci.RequestQuery{
+	res, err := suite.store.Query(&storetypes.RequestQuery{
 		Path:  fmt.Sprintf("/%s/key", suite.storeKey.Name()), // required path to get key/value+proof
 		Data:  []byte("MYKEY"),
 		Prove: true,
 	})
+	require.NoError(suite.T(), err)
 	require.NotNil(suite.T(), res.ProofOps)
 
 	proof, err := types.ConvertProofs(res.ProofOps)
 	require.NoError(suite.T(), err)
 
-	suite.Require().NoError(proof.ValidateBasic())
-	suite.Require().Error(types.MerkleProof{}.ValidateBasic())
-
 	cases := []struct {
 		name       string
 		root       []byte
-		pathArr    []string
+		pathArr    [][]byte
 		value      []byte
 		malleate   func()
 		shouldPass bool
 	}{
-		{"valid proof", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, []byte("MYVALUE"), func() {}, true},            // valid proof
-		{"wrong value", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, []byte("WRONGVALUE"), func() {}, false},        // invalid proof with wrong value
-		{"nil value", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, []byte(nil), func() {}, false},                   // invalid proof with nil value
-		{"wrong key", cid.Hash, []string{suite.storeKey.Name(), "NOTMYKEY"}, []byte("MYVALUE"), func() {}, false},          // invalid proof with wrong key
-		{"wrong path 1", cid.Hash, []string{suite.storeKey.Name(), "MYKEY", "MYKEY"}, []byte("MYVALUE"), func() {}, false}, // invalid proof with wrong path
-		{"wrong path 2", cid.Hash, []string{suite.storeKey.Name()}, []byte("MYVALUE"), func() {}, false},                   // invalid proof with wrong path
-		{"wrong path 3", cid.Hash, []string{"MYKEY"}, []byte("MYVALUE"), func() {}, false},                                 // invalid proof with wrong path
-		{"wrong storekey", cid.Hash, []string{"otherStoreKey", "MYKEY"}, []byte("MYVALUE"), func() {}, false},              // invalid proof with wrong store prefix
-		{"wrong root", []byte("WRONGROOT"), []string{suite.storeKey.Name(), "MYKEY"}, []byte("MYVALUE"), func() {}, false}, // invalid proof with wrong root
-		{"nil root", []byte(nil), []string{suite.storeKey.Name(), "MYKEY"}, []byte("MYVALUE"), func() {}, false},           // invalid proof with nil root
-		{"proof is wrong length", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, []byte("MYVALUE"), func() {
+		{"valid proof", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte("MYVALUE"), func() {}, true},                    // valid proof
+		{"wrong value", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte("WRONGVALUE"), func() {}, false},                // invalid proof with wrong value
+		{"nil value", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte(nil), func() {}, false},                           // invalid proof with nil value
+		{"wrong key", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("NOTMYKEY")}, []byte("MYVALUE"), func() {}, false},                  // invalid proof with wrong key
+		{"wrong path 1", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY"), []byte("MYKEY")}, []byte("MYVALUE"), func() {}, false}, // invalid proof with wrong path
+		{"wrong path 2", cid.Hash, [][]byte{[]byte(suite.storeKey.Name())}, []byte("MYVALUE"), func() {}, false},                                   // invalid proof with wrong path
+		{"wrong path 3", cid.Hash, [][]byte{[]byte("MYKEY")}, []byte("MYVALUE"), func() {}, false},                                                 // invalid proof with wrong path
+		{"wrong storekey", cid.Hash, [][]byte{[]byte("otherStoreKey"), []byte("MYKEY")}, []byte("MYVALUE"), func() {}, false},                      // invalid proof with wrong store prefix
+		{"wrong root", []byte("WRONGROOT"), [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte("MYVALUE"), func() {}, false},         // invalid proof with wrong root
+		{"nil root", []byte(nil), [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte("MYVALUE"), func() {}, false},                   // invalid proof with nil root
+		{"proof is wrong length", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, []byte("MYVALUE"), func() {
 			proof = types.MerkleProof{
 				Proofs: proof.Proofs[1:],
 			}
@@ -64,10 +64,10 @@ func (suite *MerkleTestSuite) TestVerifyMembership() {
 			err := proof.VerifyMembership(types.GetSDKSpecs(), &root, path, tc.value)
 
 			if tc.shouldPass {
-				//nolint: scopelint
+				// nolint: scopelint
 				suite.Require().NoError(err, "test case %d should have passed", i)
 			} else {
-				//nolint: scopelint
+				// nolint: scopelint
 				suite.Require().Error(err, "test case %d should have failed", i)
 			}
 		})
@@ -79,35 +79,34 @@ func (suite *MerkleTestSuite) TestVerifyNonMembership() {
 	cid := suite.store.Commit()
 
 	// Get Proof
-	res := suite.store.Query(abci.RequestQuery{
+	res, err := suite.store.Query(&storetypes.RequestQuery{
 		Path:  fmt.Sprintf("/%s/key", suite.storeKey.Name()), // required path to get key/value+proof
 		Data:  []byte("MYABSENTKEY"),
 		Prove: true,
 	})
+	require.NoError(suite.T(), err)
 	require.NotNil(suite.T(), res.ProofOps)
 
 	proof, err := types.ConvertProofs(res.ProofOps)
 	require.NoError(suite.T(), err)
 
-	suite.Require().NoError(proof.ValidateBasic())
-
 	cases := []struct {
 		name       string
 		root       []byte
-		pathArr    []string
+		pathArr    [][]byte
 		malleate   func()
 		shouldPass bool
 	}{
-		{"valid proof", cid.Hash, []string{suite.storeKey.Name(), "MYABSENTKEY"}, func() {}, true},            // valid proof
-		{"wrong key", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, func() {}, false},                   // invalid proof with existent key
-		{"wrong path 1", cid.Hash, []string{suite.storeKey.Name(), "MYKEY", "MYABSENTKEY"}, func() {}, false}, // invalid proof with wrong path
-		{"wrong path 2", cid.Hash, []string{suite.storeKey.Name(), "MYABSENTKEY", "MYKEY"}, func() {}, false}, // invalid proof with wrong path
-		{"wrong path 3", cid.Hash, []string{suite.storeKey.Name()}, func() {}, false},                         // invalid proof with wrong path
-		{"wrong path 4", cid.Hash, []string{"MYABSENTKEY"}, func() {}, false},                                 // invalid proof with wrong path
-		{"wrong storeKey", cid.Hash, []string{"otherStoreKey", "MYABSENTKEY"}, func() {}, false},              // invalid proof with wrong store prefix
-		{"wrong root", []byte("WRONGROOT"), []string{suite.storeKey.Name(), "MYABSENTKEY"}, func() {}, false}, // invalid proof with wrong root
-		{"nil root", []byte(nil), []string{suite.storeKey.Name(), "MYABSENTKEY"}, func() {}, false},           // invalid proof with nil root
-		{"proof is wrong length", cid.Hash, []string{suite.storeKey.Name(), "MYKEY"}, func() {
+		{"valid proof", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYABSENTKEY")}, func() {}, true},                    // valid proof
+		{"wrong key", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, func() {}, false},                           // invalid proof with existent key
+		{"wrong path 1", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY"), []byte("MYABSENTKEY")}, func() {}, false}, // invalid proof with wrong path
+		{"wrong path 2", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYABSENTKEY"), []byte("MYKEY")}, func() {}, false}, // invalid proof with wrong path
+		{"wrong path 3", cid.Hash, [][]byte{[]byte(suite.storeKey.Name())}, func() {}, false},                                         // invalid proof with wrong path
+		{"wrong path 4", cid.Hash, [][]byte{[]byte("MYABSENTKEY")}, func() {}, false},                                                 // invalid proof with wrong path
+		{"wrong storeKey", cid.Hash, [][]byte{[]byte("otherStoreKey"), []byte("MYABSENTKEY")}, func() {}, false},                      // invalid proof with wrong store prefix
+		{"wrong root", []byte("WRONGROOT"), [][]byte{[]byte(suite.storeKey.Name()), []byte("MYABSENTKEY")}, func() {}, false},         // invalid proof with wrong root
+		{"nil root", []byte(nil), [][]byte{[]byte(suite.storeKey.Name()), []byte("MYABSENTKEY")}, func() {}, false},                   // invalid proof with nil root
+		{"proof is wrong length", cid.Hash, [][]byte{[]byte(suite.storeKey.Name()), []byte("MYKEY")}, func() {
 			proof = types.MerkleProof{
 				Proofs: proof.Proofs[1:],
 			}
@@ -127,10 +126,10 @@ func (suite *MerkleTestSuite) TestVerifyNonMembership() {
 			err := proof.VerifyNonMembership(types.GetSDKSpecs(), &root, path)
 
 			if tc.shouldPass {
-				//nolint: scopelint
+				// nolint: scopelint
 				suite.Require().NoError(err, "test case %d should have passed", i)
 			} else {
-				//nolint: scopelint
+				// nolint: scopelint
 				suite.Require().Error(err, "test case %d should have failed", i)
 			}
 		})
@@ -140,31 +139,20 @@ func (suite *MerkleTestSuite) TestVerifyNonMembership() {
 func TestApplyPrefix(t *testing.T) {
 	prefix := types.NewMerklePrefix([]byte("storePrefixKey"))
 
-	pathStr := "pathone/pathtwo/paththree/key"
-	path := types.MerklePath{
-		KeyPath: []string{pathStr},
+	pathBz := []byte("pathone/pathtwo/paththree/key")
+	path := v2.MerklePath{
+		KeyPath: [][]byte{pathBz},
 	}
 
 	prefixedPath, err := types.ApplyPrefix(prefix, path)
 	require.NoError(t, err, "valid prefix returns error")
+	require.Len(t, prefixedPath.GetKeyPath(), 2, "unexpected key path length")
 
-	require.Equal(t, "/storePrefixKey/"+pathStr, prefixedPath.Pretty(), "Prefixed path incorrect")
-	require.Equal(t, "/storePrefixKey/pathone%2Fpathtwo%2Fpaththree%2Fkey", prefixedPath.String(), "Prefixed escaped path incorrect")
-}
+	key0, err := prefixedPath.GetKey(0)
+	require.NoError(t, err, "get key 0 returns error")
+	require.Equal(t, prefix.KeyPrefix, key0, "key 0 does not match expected value")
 
-func TestString(t *testing.T) {
-	path := types.NewMerklePath("rootKey", "storeKey", "path/to/leaf")
-
-	require.Equal(t, "/rootKey/storeKey/path%2Fto%2Fleaf", path.String(), "path String returns unxpected value")
-	require.Equal(t, "/rootKey/storeKey/path/to/leaf", path.Pretty(), "path's pretty string representation is incorrect")
-
-	onePath := types.NewMerklePath("path/to/leaf")
-
-	require.Equal(t, "/path%2Fto%2Fleaf", onePath.String(), "one element path does not have correct string representation")
-	require.Equal(t, "/path/to/leaf", onePath.Pretty(), "one element path has incorrect pretty string representation")
-
-	zeroPath := types.NewMerklePath()
-
-	require.Equal(t, "", zeroPath.String(), "zero element path does not have correct string representation")
-	require.Equal(t, "", zeroPath.Pretty(), "zero element path does not have correct pretty string representation")
+	key1, err := prefixedPath.GetKey(1)
+	require.NoError(t, err, "get key 1 returns error")
+	require.Equal(t, pathBz, key1, "key 1 does not match expected value")
 }

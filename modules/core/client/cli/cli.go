@@ -1,13 +1,15 @@
 package cli
 
 import (
-	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/spf13/cobra"
 
-	ibcclient "github.com/cosmos/ibc-go/v7/modules/core/02-client"
-	connection "github.com/cosmos/ibc-go/v7/modules/core/03-connection"
-	channel "github.com/cosmos/ibc-go/v7/modules/core/04-channel"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
+	"github.com/cosmos/cosmos-sdk/client"
+
+	ibcclient "github.com/cosmos/ibc-go/v10/modules/core/02-client"
+	connection "github.com/cosmos/ibc-go/v10/modules/core/03-connection"
+	channel "github.com/cosmos/ibc-go/v10/modules/core/04-channel"
+	channelv2 "github.com/cosmos/ibc-go/v10/modules/core/04-channel/v2"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 // GetTxCmd returns the transaction commands for this module
@@ -23,6 +25,7 @@ func GetTxCmd() *cobra.Command {
 	ibcTxCmd.AddCommand(
 		ibcclient.GetTxCmd(),
 		channel.GetTxCmd(),
+		channelv2.GetTxCmd(),
 	)
 
 	return ibcTxCmd
@@ -43,6 +46,7 @@ func GetQueryCmd() *cobra.Command {
 		ibcclient.GetQueryCmd(),
 		connection.GetQueryCmd(),
 		channel.GetQueryCmd(),
+		channelv2.GetQueryCmd(),
 	)
 
 	return ibcQueryCmd

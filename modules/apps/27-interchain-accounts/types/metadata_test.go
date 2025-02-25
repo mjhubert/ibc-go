@@ -1,8 +1,9 @@
 package types_test
 
 import (
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	connectiontypes "github.com/cosmos/ibc-go/v10/modules/core/03-connection/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 // use TestVersion as metadata being compared against
@@ -45,9 +46,20 @@ func (suite *TypesTestSuite) TestIsPreviousMetadataEqual() {
 			false,
 		},
 		{
-			"unequal encoding format",
+			"unequal and invalid encoding format",
 			func() {
 				metadata.Encoding = "invalid-encoding-format"
+
+				versionBytes, err := types.ModuleCdc.MarshalJSON(&metadata)
+				suite.Require().NoError(err)
+				previousVersion = string(versionBytes)
+			},
+			false,
+		},
+		{
+			"unequal encoding format",
+			func() {
+				metadata.Encoding = types.EncodingProto3JSON
 
 				versionBytes, err := types.ModuleCdc.MarshalJSON(&metadata)
 				suite.Require().NoError(err)
@@ -107,7 +119,7 @@ func (suite *TypesTestSuite) TestIsPreviousMetadataEqual() {
 			suite.SetupTest() // reset
 
 			path := ibctesting.NewPath(suite.chainA, suite.chainB)
-			suite.coordinator.SetupConnections(path)
+			path.SetupConnections()
 
 			expectedMetadata := types.NewMetadata(types.Version, ibctesting.FirstConnectionID, ibctesting.FirstConnectionID, TestOwnerAddress, types.EncodingProtobuf, types.TxTypeSDKMultiMsg)
 			metadata = expectedMetadata // default success case
@@ -131,12 +143,12 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
 		},
 		{
 			"success with empty account address",
@@ -150,7 +162,21 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			true,
+			nil,
+		},
+		{
+			"success with EncodingProto3JSON",
+			func() {
+				metadata = types.Metadata{
+					Version:                types.Version,
+					ControllerConnectionId: ibctesting.FirstConnectionID,
+					HostConnectionId:       ibctesting.FirstConnectionID,
+					Address:                TestOwnerAddress,
+					Encoding:               types.EncodingProto3JSON,
+					TxType:                 types.TxTypeSDKMultiMsg,
+				}
+			},
+			nil,
 		},
 		{
 			"unsupported encoding format",
@@ -164,7 +190,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidCodec,
 		},
 		{
 			"unsupported transaction type",
@@ -178,7 +204,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 "invalid-tx-type",
 				}
 			},
-			false,
+			types.ErrUnknownDataType,
 		},
 		{
 			"invalid controller connection",
@@ -192,7 +218,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			connectiontypes.ErrInvalidConnection,
 		},
 		{
 			"invalid host connection",
@@ -206,7 +232,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			connectiontypes.ErrInvalidConnection,
 		},
 		{
 			"invalid address",
@@ -220,7 +246,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidAccountAddress,
 		},
 		{
 			"invalid version",
@@ -234,7 +260,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidVersion,
 		},
 	}
 
@@ -244,7 +270,7 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 			suite.SetupTest() // reset
 
 			path := ibctesting.NewPath(suite.chainA, suite.chainB)
-			suite.coordinator.SetupConnections(path)
+			path.SetupConnections()
 
 			metadata = types.NewMetadata(types.Version, ibctesting.FirstConnectionID, ibctesting.FirstConnectionID, TestOwnerAddress, types.EncodingProtobuf, types.TxTypeSDKMultiMsg)
 
@@ -257,10 +283,11 @@ func (suite *TypesTestSuite) TestValidateControllerMetadata() {
 				metadata,
 			)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err, tc.name)
 			} else {
 				suite.Require().Error(err, tc.name)
+				suite.Require().ErrorIs(err, tc.expErr)
 			}
 		})
 	}
@@ -272,12 +299,12 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expError error
 	}{
 		{
 			"success",
 			func() {},
-			true,
+			nil,
 		},
 		{
 			"success with empty account address",
@@ -291,7 +318,21 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			true,
+			nil,
+		},
+		{
+			"success with EncodingProto3JSON",
+			func() {
+				metadata = types.Metadata{
+					Version:                types.Version,
+					ControllerConnectionId: ibctesting.FirstConnectionID,
+					HostConnectionId:       ibctesting.FirstConnectionID,
+					Address:                TestOwnerAddress,
+					Encoding:               types.EncodingProto3JSON,
+					TxType:                 types.TxTypeSDKMultiMsg,
+				}
+			},
+			nil,
 		},
 		{
 			"unsupported encoding format",
@@ -305,7 +346,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidCodec,
 		},
 		{
 			"unsupported transaction type",
@@ -319,7 +360,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 "invalid-tx-type",
 				}
 			},
-			false,
+			types.ErrUnknownDataType,
 		},
 		{
 			"invalid controller connection",
@@ -333,7 +374,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			connectiontypes.ErrInvalidConnection,
 		},
 		{
 			"invalid host connection",
@@ -347,7 +388,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			connectiontypes.ErrInvalidConnection,
 		},
 		{
 			"invalid address",
@@ -361,7 +402,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidAccountAddress,
 		},
 		{
 			"invalid version",
@@ -375,7 +416,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 					TxType:                 types.TxTypeSDKMultiMsg,
 				}
 			},
-			false,
+			types.ErrInvalidVersion,
 		},
 	}
 
@@ -385,7 +426,7 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 			suite.SetupTest() // reset
 
 			path := ibctesting.NewPath(suite.chainA, suite.chainB)
-			suite.coordinator.SetupConnections(path)
+			path.SetupConnections()
 
 			metadata = types.NewMetadata(types.Version, ibctesting.FirstConnectionID, ibctesting.FirstConnectionID, TestOwnerAddress, types.EncodingProtobuf, types.TxTypeSDKMultiMsg)
 
@@ -398,10 +439,10 @@ func (suite *TypesTestSuite) TestValidateHostMetadata() {
 				metadata,
 			)
 
-			if tc.expPass {
+			if tc.expError == nil {
 				suite.Require().NoError(err, tc.name)
 			} else {
-				suite.Require().Error(err, tc.name)
+				suite.Require().ErrorIs(err, tc.expError)
 			}
 		})
 	}

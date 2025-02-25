@@ -3,8 +3,12 @@ package keeper_test
 import (
 	"fmt"
 
-	icahostkeeper "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/host/keeper"
-	icahosttypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/host/types"
+	"github.com/cosmos/cosmos-sdk/runtime"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+
+	icahostkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
+	icahosttypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/types"
 )
 
 func (suite *KeeperTestSuite) TestMigratorMigrateParams() {
@@ -22,9 +26,28 @@ func (suite *KeeperTestSuite) TestMigratorMigrateParams() {
 			},
 			icahosttypes.DefaultParams(),
 		},
+		{
+			"success: no legacy params pre-migration",
+			func() {
+				suite.chainA.GetSimApp().ICAHostKeeper = icahostkeeper.NewKeeper(
+					suite.chainA.Codec,
+					runtime.NewKVStoreService(suite.chainA.GetSimApp().GetKey(icahosttypes.StoreKey)),
+					nil, // assign a nil legacy param subspace
+					suite.chainA.GetSimApp().IBCKeeper.ChannelKeeper,
+					suite.chainA.GetSimApp().IBCKeeper.ChannelKeeper,
+					suite.chainA.GetSimApp().AccountKeeper,
+					suite.chainA.GetSimApp().MsgServiceRouter(),
+					suite.chainA.GetSimApp().GRPCQueryRouter(),
+					authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+				)
+			},
+			icahosttypes.DefaultParams(),
+		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		suite.Run(fmt.Sprintf("case %s", tc.msg), func() {
 			suite.SetupTest() // reset
 

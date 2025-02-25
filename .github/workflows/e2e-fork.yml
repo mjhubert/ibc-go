@@ -5,47 +5,58 @@ on:
     branches:
       - main
     paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - "LICENSE"
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+
+# cancel workflows if a new one is triggered on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # dynamically build a matrix of test/test suite pairs to run
   build-test-matrix:
-    if: ${{ github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    # run this job on forks and copies of ibc-go, for example: a public fork or a private copy of ibc-go.
+    if: ${{ github.repository != 'cosmos/ibc-go' || github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch' }}
+    runs-on: depot-ubuntu-22.04-4
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: 1.19
+          go-version: '1.23'
       - id: set-matrix
-        run: echo "matrix=$(go run cmd/build_test_matrix/main.go)" >> $GITHUB_OUTPUT
+        run: |
+          output=$(go run cmd/build_test_matrix/main.go)
+          echo "matrix=$output" >> $GITHUB_OUTPUT
         env:
-          TEST_EXCLUSIONS: "TestInterTxTestSuite,TestIncentivizedInterTxTestSuite,TestUpgradeTestSuite"
+          TEST_EXCLUSIONS: 'TestUpgradeTestSuite'
 
-  e2e:
+  e2e-fork:
     env:
       CHAIN_A_TAG: latest
       CHAIN_B_TAG: latest
       CHAIN_IMAGE: ibc-go-simd
-    if: ${{ github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch' }}
+      FORK: "true"
+    # run this job on forks and copies of ibc-go, for example: a public fork or a private copy of ibc-go.
+    if: ${{ github.repository != 'cosmos/ibc-go' || github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch' }}
     needs:
       - build-test-matrix
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-4
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.build-test-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Docker Build
         run: docker build . -t "${CHAIN_IMAGE}:${CHAIN_A_TAG}" --build-arg IBC_GO_VERSION=latest
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.19
+          go-version: '1.23'
+          cache-dependency-path: 'e2e/go.sum'
       - name: Run e2e Test
         run: |
           cd e2e

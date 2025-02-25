@@ -6,7 +6,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
 )
 
 const (
@@ -28,10 +28,13 @@ const (
 
 	// ChannelPrefix is the prefix used when creating a channel identifier
 	ChannelPrefix = "channel-"
+
+	// ParamsKey defines the key to store the params in the keeper.
+	ParamsKey = "channelParams"
 )
 
 // FormatChannelIdentifier returns the channel identifier with the sequence appended.
-// This is a SDK specific format not enforced by IBC protocol.
+// This is an SDK specific format not enforced by IBC protocol.
 func FormatChannelIdentifier(sequence uint64) string {
 	return fmt.Sprintf("%s%d", ChannelPrefix, sequence)
 }

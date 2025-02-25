@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	errorsmod "cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	ibcerrors "github.com/cosmos/ibc-go/v7/modules/core/errors"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 var _ exported.Height = (*Height)(nil)
@@ -55,7 +56,7 @@ func (h Height) GetRevisionHeight() uint64 {
 func (h Height) Compare(other exported.Height) int64 {
 	height, ok := other.(Height)
 	if !ok {
-		panic(fmt.Sprintf("cannot compare against invalid height type: %T. expected height type: %T", other, h))
+		panic(fmt.Errorf("cannot compare against invalid height type: %T. expected height type: %T", other, h))
 	}
 	var a, b big.Int
 	if h.RevisionNumber != height.RevisionNumber {
@@ -101,7 +102,7 @@ func (h Height) String() string {
 }
 
 // Decrement will return a new height with the RevisionHeight decremented
-// If the RevisionHeight is already at lowest value (1), then false success flag is returend
+// If the RevisionHeight is already at lowest value (1), then false success flag is returned
 func (h Height) Decrement() (decremented exported.Height, success bool) {
 	if h.RevisionHeight == 0 {
 		return Height{}, false
@@ -160,11 +161,11 @@ func SetRevisionNumber(chainID string, revision uint64) (string, error) {
 
 	splitStr := strings.Split(chainID, "-")
 	// swap out revision number with given revision
-	splitStr[len(splitStr)-1] = strconv.Itoa(int(revision))
+	splitStr[len(splitStr)-1] = strconv.FormatUint(revision, 10)
 	return strings.Join(splitStr, "-"), nil
 }
 
-// ParseChainID is a utility function that returns an revision number from the given ChainID.
+// ParseChainID is a utility function that returns a revision number from the given ChainID.
 // ParseChainID attempts to parse a chain id in the format: `{chainID}-{revision}`
 // and return the revisionnumber as a uint64.
 // If the chainID is not in the expected format, a default revision value of 0 is returned.
@@ -177,7 +178,7 @@ func ParseChainID(chainID string) uint64 {
 	revision, err := strconv.ParseUint(splitStr[len(splitStr)-1], 10, 64)
 	// sanity check: error should always be nil since regex only allows numbers in last element
 	if err != nil {
-		panic(fmt.Sprintf("regex allowed non-number value as last split element for chainID: %s", chainID))
+		panic(fmt.Errorf("regex allowed non-number value as last split element for chainID: %s", chainID))
 	}
 	return revision
 }

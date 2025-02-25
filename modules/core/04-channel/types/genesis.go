@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
+	errorsmod "cosmossdk.io/errors"
+
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	ibcerrors "github.com/cosmos/ibc-go/v10/modules/core/errors"
 )
 
 // NewPacketState creates a new PacketState instance.
@@ -45,15 +48,18 @@ func (ps PacketSequence) Validate() error {
 func NewGenesisState(
 	channels []IdentifiedChannel, acks, receipts, commitments []PacketState,
 	sendSeqs, recvSeqs, ackSeqs []PacketSequence, nextChannelSequence uint64,
+	params Params,
 ) GenesisState {
 	return GenesisState{
 		Channels:            channels,
 		Acknowledgements:    acks,
+		Receipts:            receipts,
 		Commitments:         commitments,
 		SendSequences:       sendSeqs,
 		RecvSequences:       recvSeqs,
 		AckSequences:        ackSeqs,
 		NextChannelSequence: nextChannelSequence,
+		Params:              params,
 	}
 }
 
@@ -68,6 +74,7 @@ func DefaultGenesisState() GenesisState {
 		RecvSequences:       []PacketSequence{},
 		AckSequences:        []PacketSequence{},
 		NextChannelSequence: 0,
+		Params:              DefaultParams(),
 	}
 }
 
@@ -75,7 +82,7 @@ func DefaultGenesisState() GenesisState {
 // failure.
 func (gs GenesisState) Validate() error {
 	// keep track of the max sequence to ensure it is less than
-	// the next sequence used in creating connection identifers.
+	// the next sequence used in creating connection identifiers.
 	var maxSequence uint64
 
 	for i, channel := range gs.Channels {
@@ -94,36 +101,36 @@ func (gs GenesisState) Validate() error {
 	}
 
 	if maxSequence != 0 && maxSequence >= gs.NextChannelSequence {
-		return fmt.Errorf("next channel sequence %d must be greater than maximum sequence used in channel identifier %d", gs.NextChannelSequence, maxSequence)
+		return errorsmod.Wrapf(ibcerrors.ErrInvalidSequence, "next channel sequence %d must be greater than maximum sequence used in channel identifier %d", gs.NextChannelSequence, maxSequence)
 	}
 
 	for i, ack := range gs.Acknowledgements {
 		if err := ack.Validate(); err != nil {
-			return fmt.Errorf("invalid acknowledgement %v ack index %d: %w", ack, i, err)
+			return errorsmod.Wrapf(ErrInvalidAcknowledgement, "%v ack index %d: %s", ack, i, err.Error())
 		}
 		if len(ack.Data) == 0 {
-			return fmt.Errorf("invalid acknowledgement %v ack index %d: data bytes cannot be empty", ack, i)
+			return errorsmod.Wrapf(ErrInvalidAcknowledgement, "%v ack index %d: data bytes cannot be empty", ack, i)
 		}
 	}
 
 	for i, receipt := range gs.Receipts {
 		if err := receipt.Validate(); err != nil {
-			return fmt.Errorf("invalid acknowledgement %v ack index %d: %w", receipt, i, err)
+			return errorsmod.Wrapf(ErrInvalidAcknowledgement, "%v ack index %d: %s", receipt, i, err.Error())
 		}
 	}
 
 	for i, commitment := range gs.Commitments {
 		if err := commitment.Validate(); err != nil {
-			return fmt.Errorf("invalid commitment %v index %d: %w", commitment, i, err)
+			return errorsmod.Wrapf(ErrInvalidCommitment, "%v index %d: %s", commitment, i, err.Error())
 		}
 		if len(commitment.Data) == 0 {
-			return fmt.Errorf("invalid acknowledgement %v ack index %d: data bytes cannot be empty", commitment, i)
+			return errorsmod.Wrapf(ErrInvalidAcknowledgement, "%v ack index %d: data bytes cannot be empty", commitment, i)
 		}
 	}
 
 	for i, ss := range gs.SendSequences {
 		if err := ss.Validate(); err != nil {
-			return fmt.Errorf("invalid send sequence %v index %d: %w", ss, i, err)
+			return errorsmod.Wrapf(ibcerrors.ErrInvalidSequence, "invalid send sequence %v index %d: %s", ss, i, err.Error())
 		}
 	}
 
@@ -135,7 +142,7 @@ func (gs GenesisState) Validate() error {
 
 	for i, as := range gs.AckSequences {
 		if err := as.Validate(); err != nil {
-			return fmt.Errorf("invalid acknowledgement sequence %v index %d: %w", as, i, err)
+			return errorsmod.Wrapf(ErrInvalidAcknowledgement, "sequence %v index %d: %s", as, i, err.Error())
 		}
 	}
 

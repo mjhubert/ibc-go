@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"testing"
 
+	testifysuite "github.com/stretchr/testify/suite"
+
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
-	"github.com/stretchr/testify/suite"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	"github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
 var (
@@ -23,7 +24,7 @@ var (
 )
 
 type TypesTestSuite struct {
-	suite.Suite
+	testifysuite.Suite
 
 	coordinator *ibctesting.Coordinator
 
@@ -39,7 +40,7 @@ func (suite *TypesTestSuite) SetupTest() {
 }
 
 func TestTypesTestSuite(t *testing.T) {
-	suite.Run(t, new(TypesTestSuite))
+	testifysuite.Run(t, new(TypesTestSuite))
 }
 
 func (suite *TypesTestSuite) TestGenerateAddress() {
@@ -52,45 +53,47 @@ func (suite *TypesTestSuite) TestGenerateAddress() {
 
 func (suite *TypesTestSuite) TestValidateAccountAddress() {
 	testCases := []struct {
-		name    string
-		address string
-		expPass bool
+		name     string
+		address  string
+		expError error
 	}{
 		{
 			"success",
 			TestOwnerAddress,
-			true,
+			nil,
 		},
 		{
 			"success with single character",
 			"a",
-			true,
+			nil,
 		},
 		{
 			"empty string",
 			"",
-			false,
+			types.ErrInvalidAccountAddress,
 		},
 		{
 			"only spaces",
 			"     ",
-			false,
+			types.ErrInvalidAccountAddress,
 		},
 		{
 			"address is too long",
-			ibctesting.LongString,
-			false,
+			ibctesting.GenerateString(uint(types.DefaultMaxAddrLength) + 1),
+			types.ErrInvalidAccountAddress,
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		suite.Run(tc.name, func() {
 			err := types.ValidateAccountAddress(tc.address)
 
-			if tc.expPass {
+			if tc.expError == nil {
 				suite.Require().NoError(err, tc.name)
 			} else {
-				suite.Require().Error(err, tc.name)
+				suite.Require().ErrorIs(err, tc.expError, tc.name)
 			}
 		})
 	}
@@ -117,29 +120,32 @@ func (suite *TypesTestSuite) TestGenesisAccountValidate() {
 	ownerAddr := sdk.AccAddress(pubkey.Address())
 
 	testCases := []struct {
-		name    string
-		acc     authtypes.GenesisAccount
-		expPass bool
+		name   string
+		acc    authtypes.GenesisAccount
+		expErr error
 	}{
 		{
 			"success",
 			types.NewInterchainAccount(baseAcc, ownerAddr.String()),
-			true,
+			nil,
 		},
 		{
 			"interchain account with empty AccountOwner field",
 			types.NewInterchainAccount(baseAcc, ""),
-			false,
+			types.ErrInvalidAccountAddress,
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
+
 		err := tc.acc.Validate()
 
-		if tc.expPass {
+		if tc.expErr == nil {
 			suite.Require().NoError(err)
 		} else {
 			suite.Require().Error(err)
+			suite.Require().ErrorIs(err, tc.expErr)
 		}
 	}
 }

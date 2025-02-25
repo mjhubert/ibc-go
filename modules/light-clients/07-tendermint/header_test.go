@@ -1,22 +1,23 @@
 package tendermint_test
 
 import (
+	"errors"
 	"time"
 
-	tmprotocrypto "github.com/cometbft/cometbft/proto/tendermint/crypto"
+	cmtprotocrypto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
-	ibctm "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
+	ibctm "github.com/cosmos/ibc-go/v10/modules/light-clients/07-tendermint"
 )
 
 func (suite *TendermintTestSuite) TestGetHeight() {
-	header := suite.chainA.LastHeader
+	header := suite.chainA.LatestCommittedHeader
 	suite.Require().NotEqual(uint64(0), header.GetHeight())
 }
 
 func (suite *TendermintTestSuite) TestGetTime() {
-	header := suite.chainA.LastHeader
+	header := suite.chainA.LatestCommittedHeader
 	suite.Require().NotEqual(time.Time{}, header.GetTime())
 }
 
@@ -25,35 +26,37 @@ func (suite *TendermintTestSuite) TestHeaderValidateBasic() {
 	testCases := []struct {
 		name     string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
-		{"valid header", func() {}, true},
+		{"valid header", func() {}, nil},
 		{"header is nil", func() {
 			header.Header = nil
-		}, false},
+		}, errors.New("tendermint header cannot be nil")},
 		{"signed header is nil", func() {
 			header.SignedHeader = nil
-		}, false},
+		}, errors.New("tendermint signed header cannot be nil")},
 		{"SignedHeaderFromProto failed", func() {
 			header.SignedHeader.Commit.Height = -1
-		}, false},
+		}, errors.New("header is not a tendermint header")},
 		{"signed header failed tendermint ValidateBasic", func() {
-			header = suite.chainA.LastHeader
+			header = suite.chainA.LatestCommittedHeader
 			header.SignedHeader.Commit = nil
-		}, false},
+		}, errors.New("header failed basic validation")},
 		{"trusted height is equal to header height", func() {
-			header.TrustedHeight = header.GetHeight().(clienttypes.Height)
-		}, false},
+			var ok bool
+			header.TrustedHeight, ok = header.GetHeight().(clienttypes.Height)
+			suite.Require().True(ok)
+		}, errors.New("invalid header height")},
 		{"validator set nil", func() {
 			header.ValidatorSet = nil
-		}, false},
+		}, errors.New("invalid client header")},
 		{"ValidatorSetFromProto failed", func() {
-			header.ValidatorSet.Validators[0].PubKey = tmprotocrypto.PublicKey{}
-		}, false},
+			header.ValidatorSet.Validators[0].PubKey = cmtprotocrypto.PublicKey{}
+		}, errors.New("validator set is not tendermint validator set")},
 		{"header validator hash does not equal hash of validator set", func() {
 			// use chainB's randomly generated validator set
-			header.ValidatorSet = suite.chainB.LastHeader.ValidatorSet
-		}, false},
+			header.ValidatorSet = suite.chainB.LatestCommittedHeader.ValidatorSet
+		}, errors.New("validator set does not match hash")},
 	}
 
 	suite.Require().Equal(exported.Tendermint, suite.header.ClientType())
@@ -64,16 +67,17 @@ func (suite *TendermintTestSuite) TestHeaderValidateBasic() {
 		suite.Run(tc.name, func() {
 			suite.SetupTest()
 
-			header = suite.chainA.LastHeader // must be explicitly changed in malleate
+			header = suite.chainA.LatestCommittedHeader // must be explicitly changed in malleate
 
 			tc.malleate()
 
 			err := header.ValidateBasic()
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 			} else {
 				suite.Require().Error(err)
+				suite.Require().ErrorContains(err, tc.expErr.Error())
 			}
 		})
 	}

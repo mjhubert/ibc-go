@@ -1,186 +1,202 @@
 package keeper_test
 
 import (
+	"errors"
 	"fmt"
 
-	"cosmossdk.io/math"
+	sdkmath "cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/query"
 
-	"github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	ibctesting "github.com/cosmos/ibc-go/v7/testing"
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	ibctesting "github.com/cosmos/ibc-go/v10/testing"
 )
 
-func (suite *KeeperTestSuite) TestQueryDenomTrace() {
+func (suite *KeeperTestSuite) TestQueryDenom() {
 	var (
-		req      *types.QueryDenomTraceRequest
-		expTrace types.DenomTrace
+		req      *types.QueryDenomRequest
+		expDenom types.Denom
 	)
 
 	testCases := []struct {
 		msg      string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success: correct ibc denom",
 			func() {
-				expTrace.Path = "transfer/channelToA/transfer/channelToB" //nolint:goconst
-				expTrace.BaseDenom = "uatom"                              //nolint:goconst
-				suite.chainA.GetSimApp().TransferKeeper.SetDenomTrace(suite.chainA.GetContext(), expTrace)
+				expDenom = types.NewDenom(
+					"uatom",                                //nolint:goconst
+					types.NewHop("transfer", "channelToA"), //nolint:goconst
+					types.NewHop("transfer", "channelToB"), //nolint:goconst
+				)
+				suite.chainA.GetSimApp().TransferKeeper.SetDenom(suite.chainA.GetContext(), expDenom)
 
-				req = &types.QueryDenomTraceRequest{
-					Hash: expTrace.IBCDenom(),
+				req = &types.QueryDenomRequest{
+					Hash: expDenom.IBCDenom(),
 				}
 			},
-			true,
+			nil,
 		},
 		{
 			"success: correct hex hash",
 			func() {
-				expTrace.Path = "transfer/channelToA/transfer/channelToB"
-				expTrace.BaseDenom = "uatom"
-				suite.chainA.GetSimApp().TransferKeeper.SetDenomTrace(suite.chainA.GetContext(), expTrace)
+				expDenom = types.NewDenom(
+					"uatom",                                //nolint:goconst
+					types.NewHop("transfer", "channelToA"), //nolint:goconst
+					types.NewHop("transfer", "channelToB"), //nolint:goconst
+				)
+				suite.chainA.GetSimApp().TransferKeeper.SetDenom(suite.chainA.GetContext(), expDenom)
 
-				req = &types.QueryDenomTraceRequest{
-					Hash: expTrace.Hash().String(),
+				req = &types.QueryDenomRequest{
+					Hash: expDenom.Hash().String(),
 				}
 			},
-			true,
+			nil,
 		},
 		{
 			"failure: invalid hash",
 			func() {
-				req = &types.QueryDenomTraceRequest{
+				req = &types.QueryDenomRequest{
 					Hash: "!@#!@#!",
 				}
 			},
-			false,
+			errors.New("invalid denom trace hash"),
 		},
 		{
 			"failure: not found denom trace",
 			func() {
-				expTrace.Path = "transfer/channelToA/transfer/channelToB"
-				expTrace.BaseDenom = "uatom"
-				req = &types.QueryDenomTraceRequest{
-					Hash: expTrace.IBCDenom(),
+				expDenom = types.NewDenom(
+					"uatom",                                //nolint:goconst
+					types.NewHop("transfer", "channelToA"), //nolint:goconst
+					types.NewHop("transfer", "channelToB"), //nolint:goconst
+				)
+
+				req = &types.QueryDenomRequest{
+					Hash: expDenom.IBCDenom(),
 				}
 			},
-			false,
+			errors.New("denomination not found"),
 		},
 	}
 
 	for _, tc := range testCases {
 		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
+			tc := tc
 			suite.SetupTest() // reset
 
 			tc.malleate()
-			ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+			ctx := suite.chainA.GetContext()
 
-			res, err := suite.chainA.GetSimApp().TransferKeeper.DenomTrace(ctx, req)
+			res, err := suite.chainA.GetSimApp().TransferKeeper.Denom(ctx, req)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 				suite.Require().NotNil(res)
-				suite.Require().Equal(&expTrace, res.DenomTrace)
+				suite.Require().Equal(&expDenom, res.Denom)
 			} else {
-				suite.Require().Error(err)
+				ibctesting.RequireErrorIsOrContains(suite.T(), err, tc.expErr, err.Error())
 			}
 		})
 	}
 }
 
-func (suite *KeeperTestSuite) TestQueryDenomTraces() {
+func (suite *KeeperTestSuite) TestQueryDenoms() {
 	var (
-		req       *types.QueryDenomTracesRequest
-		expTraces = types.Traces(nil)
+		req       *types.QueryDenomsRequest
+		expDenoms = types.Denoms(nil)
 	)
 
 	testCases := []struct {
 		msg      string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"empty pagination",
 			func() {
-				req = &types.QueryDenomTracesRequest{}
+				req = &types.QueryDenomsRequest{}
 			},
-			true,
+			nil,
 		},
 		{
 			"success",
 			func() {
-				expTraces = append(expTraces, types.DenomTrace{Path: "", BaseDenom: "uatom"})
-				expTraces = append(expTraces, types.DenomTrace{Path: "transfer/channelToB", BaseDenom: "uatom"})
-				expTraces = append(expTraces, types.DenomTrace{Path: "transfer/channelToA/transfer/channelToB", BaseDenom: "uatom"})
+				expDenoms = append(expDenoms, types.NewDenom("uatom"))
+				expDenoms = append(expDenoms, types.NewDenom("uatom", types.NewHop("transfer", "channelToB")))
+				expDenoms = append(expDenoms, types.NewDenom("uatom", types.NewHop("transfer", "channelToA"), types.NewHop("transfer", "channelToB")))
 
-				for _, trace := range expTraces {
-					suite.chainA.GetSimApp().TransferKeeper.SetDenomTrace(suite.chainA.GetContext(), trace)
+				for _, trace := range expDenoms {
+					suite.chainA.GetSimApp().TransferKeeper.SetDenom(suite.chainA.GetContext(), trace)
 				}
 
-				req = &types.QueryDenomTracesRequest{
+				req = &types.QueryDenomsRequest{
 					Pagination: &query.PageRequest{
 						Limit:      5,
 						CountTotal: false,
 					},
 				}
 			},
-			true,
+			nil,
 		},
 	}
 
 	for _, tc := range testCases {
-		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
+		tc := tc
+		suite.Run(tc.msg, func() {
 			suite.SetupTest() // reset
 
 			tc.malleate()
-			ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+			ctx := suite.chainA.GetContext()
 
-			res, err := suite.chainA.GetSimApp().TransferKeeper.DenomTraces(ctx, req)
+			res, err := suite.chainA.GetSimApp().TransferKeeper.Denoms(ctx, req)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 				suite.Require().NotNil(res)
-				suite.Require().Equal(expTraces.Sort(), res.DenomTraces)
+				suite.Require().Equal(expDenoms.Sort(), res.Denoms)
 			} else {
-				suite.Require().Error(err)
+				ibctesting.RequireErrorIsOrContains(suite.T(), err, tc.expErr, err.Error())
 			}
 		})
 	}
 }
 
 func (suite *KeeperTestSuite) TestQueryParams() {
-	ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+	ctx := suite.chainA.GetContext()
 	expParams := types.DefaultParams()
 	res, _ := suite.chainA.GetSimApp().TransferKeeper.Params(ctx, &types.QueryParamsRequest{})
 	suite.Require().Equal(&expParams, res.Params)
 }
 
 func (suite *KeeperTestSuite) TestQueryDenomHash() {
-	reqTrace := types.DenomTrace{
-		Path:      "transfer/channelToA/transfer/channelToB",
-		BaseDenom: "uatom",
-	}
+	reqDenom := types.NewDenom("uatom", types.NewHop("transfer", "channelToA"), types.NewHop("transfer", "channelToB"))
 
 	var (
 		req     *types.QueryDenomHashRequest
-		expHash = reqTrace.Hash().String()
+		expHash = reqDenom.Hash().String()
 	)
 
 	testCases := []struct {
 		msg      string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
+		{
+			"success",
+			func() {},
+			nil,
+		},
 		{
 			"invalid trace",
 			func() {
 				req = &types.QueryDenomHashRequest{
-					Trace: "transfer/channelToA/transfer/",
+					Trace: "transfer%%/channel-1/transfer/channel-1/uatom",
 				}
 			},
-			false,
+			errors.New("invalid trace"),
 		},
 		{
 			"not found denom trace",
@@ -189,35 +205,31 @@ func (suite *KeeperTestSuite) TestQueryDenomHash() {
 					Trace: "transfer/channelToC/uatom",
 				}
 			},
-			false,
-		},
-		{
-			"success",
-			func() {},
-			true,
+			errors.New("denomination not found"),
 		},
 	}
 
 	for _, tc := range testCases {
-		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
+		tc := tc
+		suite.Run(tc.msg, func() {
 			suite.SetupTest() // reset
 
 			req = &types.QueryDenomHashRequest{
-				Trace: reqTrace.GetFullDenomPath(),
+				Trace: reqDenom.Path(),
 			}
-			suite.chainA.GetSimApp().TransferKeeper.SetDenomTrace(suite.chainA.GetContext(), reqTrace)
+			suite.chainA.GetSimApp().TransferKeeper.SetDenom(suite.chainA.GetContext(), reqDenom)
 
 			tc.malleate()
-			ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+			ctx := suite.chainA.GetContext()
 
 			res, err := suite.chainA.GetSimApp().TransferKeeper.DenomHash(ctx, req)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 				suite.Require().NotNil(res)
 				suite.Require().Equal(expHash, res.Hash)
 			} else {
-				suite.Require().Error(err)
+				ibctesting.RequireErrorIsOrContains(suite.T(), err, tc.expErr, err.Error())
 			}
 		})
 	}
@@ -225,39 +237,73 @@ func (suite *KeeperTestSuite) TestQueryDenomHash() {
 
 func (suite *KeeperTestSuite) TestEscrowAddress() {
 	var req *types.QueryEscrowAddressRequest
+	var path *ibctesting.Path
 
 	testCases := []struct {
 		msg      string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"success",
 			func() {
 				req = &types.QueryEscrowAddressRequest{
 					PortId:    ibctesting.TransferPort,
+					ChannelId: path.EndpointA.ChannelID,
+				}
+			},
+			nil,
+		},
+		{
+			"failure - channel not found",
+			func() {
+				req = &types.QueryEscrowAddressRequest{
+					PortId:    ibctesting.InvalidID,
 					ChannelId: ibctesting.FirstChannelID,
 				}
 			},
-			true,
+			errors.New("channel not found"),
+		},
+		{
+			"failure - empty channelID",
+			func() {
+				req = &types.QueryEscrowAddressRequest{
+					PortId:    ibctesting.TransferPort,
+					ChannelId: "",
+				}
+			},
+			errors.New("identifier cannot be blank"),
+		},
+		{
+			"failure - empty portID",
+			func() {
+				req = &types.QueryEscrowAddressRequest{
+					PortId:    "",
+					ChannelId: ibctesting.FirstChannelID,
+				}
+			},
+			errors.New("identifier cannot be blank"),
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
 			suite.SetupTest() // reset
+			path = ibctesting.NewTransferPath(suite.chainA, suite.chainB)
+			path.Setup()
 
 			tc.malleate()
-			ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+			ctx := suite.chainA.GetContext()
 
 			res, err := suite.chainA.GetSimApp().TransferKeeper.EscrowAddress(ctx, req)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
-				expected := types.GetEscrowAddress(ibctesting.TransferPort, ibctesting.FirstChannelID).String()
+				expected := types.GetEscrowAddress(ibctesting.TransferPort, path.EndpointA.ChannelID).String()
 				suite.Require().Equal(expected, res.EscrowAddress)
 			} else {
-				suite.Require().Error(err)
+				ibctesting.RequireErrorIsOrContains(suite.T(), err, tc.expErr, err.Error())
 			}
 		})
 	}
@@ -266,13 +312,13 @@ func (suite *KeeperTestSuite) TestEscrowAddress() {
 func (suite *KeeperTestSuite) TestTotalEscrowForDenom() {
 	var (
 		req             *types.QueryTotalEscrowForDenomRequest
-		expEscrowAmount math.Int
+		expEscrowAmount sdkmath.Int
 	)
 
 	testCases := []struct {
 		msg      string
 		malleate func()
-		expPass  bool
+		expErr   error
 	}{
 		{
 			"valid native denom with escrow amount < 2^63",
@@ -281,43 +327,37 @@ func (suite *KeeperTestSuite) TestTotalEscrowForDenom() {
 					Denom: sdk.DefaultBondDenom,
 				}
 
-				expEscrowAmount = math.NewInt(100)
+				expEscrowAmount = sdkmath.NewInt(100)
 				suite.chainA.GetSimApp().TransferKeeper.SetTotalEscrowForDenom(suite.chainA.GetContext(), sdk.NewCoin(sdk.DefaultBondDenom, expEscrowAmount))
 			},
-			true,
+			nil,
 		},
 		{
 			"valid ibc denom with escrow amount > 2^63",
 			func() {
-				denomTrace := types.DenomTrace{
-					Path:      "transfer/channel-0",
-					BaseDenom: sdk.DefaultBondDenom,
-				}
+				denom := types.NewDenom(sdk.DefaultBondDenom, types.NewHop("transfer", "channel-0"))
 
-				suite.chainA.GetSimApp().TransferKeeper.SetDenomTrace(suite.chainA.GetContext(), denomTrace)
-				expEscrowAmount, ok := math.NewIntFromString("100000000000000000000")
+				suite.chainA.GetSimApp().TransferKeeper.SetDenom(suite.chainA.GetContext(), denom)
+				expEscrowAmount, ok := sdkmath.NewIntFromString("100000000000000000000")
 				suite.Require().True(ok)
 				suite.chainA.GetSimApp().TransferKeeper.SetTotalEscrowForDenom(suite.chainA.GetContext(), sdk.NewCoin(sdk.DefaultBondDenom, expEscrowAmount))
 
 				req = &types.QueryTotalEscrowForDenomRequest{
-					Denom: denomTrace.IBCDenom(),
+					Denom: denom.IBCDenom(),
 				}
 			},
-			true,
+			nil,
 		},
 		{
 			"valid ibc denom treated as native denom",
 			func() {
-				denomTrace := types.DenomTrace{
-					Path:      "transfer/channel-0",
-					BaseDenom: sdk.DefaultBondDenom,
-				}
+				denom := types.NewDenom(sdk.DefaultBondDenom, types.NewHop("transfer", "channel-0"))
 
 				req = &types.QueryTotalEscrowForDenomRequest{
-					Denom: denomTrace.IBCDenom(),
+					Denom: denom.IBCDenom(),
 				}
 			},
-			true, // denom trace is not found, thus the denom is considered a native token
+			nil, // denom trace is not found, thus the denom is considered a native token
 		},
 		{
 			"invalid ibc denom treated as valid native denom",
@@ -326,7 +366,7 @@ func (suite *KeeperTestSuite) TestTotalEscrowForDenom() {
 					Denom: "ibc/123",
 				}
 			},
-			true, // the ibc denom does not contain a valid hash, thus the denom is considered a native token
+			nil, // the ibc denom does not contain a valid hash, thus the denom is considered a native token
 		},
 		{
 			"invalid denom",
@@ -335,24 +375,26 @@ func (suite *KeeperTestSuite) TestTotalEscrowForDenom() {
 					Denom: "??𓃠🐾??",
 				}
 			},
-			false,
+			errors.New("invalid denom"),
 		},
 	}
 
 	for _, tc := range testCases {
+		tc := tc
 		suite.Run(fmt.Sprintf("Case %s", tc.msg), func() {
 			suite.SetupTest() // reset
 
-			expEscrowAmount = sdk.ZeroInt()
+			expEscrowAmount = sdkmath.ZeroInt()
 			tc.malleate()
-			ctx := sdk.WrapSDKContext(suite.chainA.GetContext())
+			ctx := suite.chainA.GetContext()
 
 			res, err := suite.chainA.GetSimApp().TransferKeeper.TotalEscrowForDenom(ctx, req)
 
-			if tc.expPass {
+			if tc.expErr == nil {
 				suite.Require().NoError(err)
 				suite.Require().Equal(expEscrowAmount, res.Amount.Amount)
 			} else {
+				ibctesting.RequireErrorIsOrContains(suite.T(), err, tc.expErr, err.Error())
 				suite.Require().Error(err)
 			}
 		})

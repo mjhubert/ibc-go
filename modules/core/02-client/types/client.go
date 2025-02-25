@@ -6,12 +6,14 @@ import (
 	"sort"
 	"strings"
 
-	errorsmod "cosmossdk.io/errors"
-	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
-	proto "github.com/cosmos/gogoproto/proto"
+	"github.com/cosmos/gogoproto/proto"
 
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	"github.com/cosmos/ibc-go/v7/modules/core/exported"
+	errorsmod "cosmossdk.io/errors"
+
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+
+	host "github.com/cosmos/ibc-go/v10/modules/core/24-host"
+	"github.com/cosmos/ibc-go/v10/modules/core/exported"
 )
 
 var (
@@ -37,7 +39,7 @@ func NewIdentifiedClientState(clientID string, clientState exported.ClientState)
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (ics IdentifiedClientState) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return unpacker.UnpackAny(ics.ClientState, new(exported.ClientState))
 }
@@ -80,7 +82,7 @@ func NewConsensusStateWithHeight(height Height, consensusState exported.Consensu
 	}
 }
 
-// UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
+// UnpackInterfaces implements UnpackInterfacesMessage.UnpackInterfaces
 func (cswh ConsensusStateWithHeight) UnpackInterfaces(unpacker codectypes.AnyUnpacker) error {
 	return unpacker.UnpackAny(cswh.ConsensusState, new(exported.ConsensusState))
 }
